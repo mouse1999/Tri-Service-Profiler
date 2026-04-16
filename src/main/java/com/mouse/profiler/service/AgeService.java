@@ -1,5 +1,8 @@
 package com.mouse.profiler.service;
 
+import com.mouse.profiler.dto.AgeResponseDto;
+import com.mouse.profiler.model.AgeResponse;
+
 /**
  * Service responsible for communicating with the Agify API.
  * Handles age prediction and mapping names to specific age-group categories.
@@ -12,7 +15,7 @@ public class AgeService {
      * @return A DTO containing the predicted age and the classified age_group.
      * @throws ExternalApi502Exception if the API returns age: null.
      */
-    public AgeResponse fetchAgeData(String name) {
+    public AgeResponseDto fetchAgeData(String name) {
         // TODO: Implement external API call
         // TODO: Map numeric age to "child", "teenager", "adult", or "senior"
         return null;
