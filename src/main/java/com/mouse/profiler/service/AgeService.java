@@ -1,34 +1,54 @@
 package com.mouse.profiler.service;
 
 import com.mouse.profiler.dto.AgeResponseDto;
+import com.mouse.profiler.enums.AgeCategory;
+import com.mouse.profiler.exception.ApiException;
+import com.mouse.profiler.exception.InvalidAgifyException;
 import com.mouse.profiler.model.AgeResponse;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
-/**
- * Service responsible for communicating with the Agify API.
- * Handles age prediction and mapping names to specific age-group categories.
- */
+import java.time.Duration;
+
+@Service
 public class AgeService {
 
-    /**
-     * Fetches age data from the Agify API and determines the age group.
-     * * @param name The name to be analyzed.
-     * @return A DTO containing the predicted age and the classified age_group.
-     * @throws ExternalApi502Exception if the API returns age: null.
-     */
-    public AgeResponseDto fetchAgeData(String name) {
-        // TODO: Implement external API call
-        // TODO: Map numeric age to "child", "teenager", "adult", or "senior"
-        return null;
+    private final WebClient webClient;
+    private static final String AGIFY_BASE_URL="https://api.agify.io";
+    private static final String ERROR_MESSAGE = "Agify returned an invalid response";
+
+    public AgeService(WebClient.Builder webClientBuilder) {
+        this.webClient = webClientBuilder.baseUrl(AGIFY_BASE_URL).build();
     }
 
-    /**
-     * Logic to categorize age into business-defined groups.
-     * Rules: 0–12 child, 13–19 teenager, 20–59 adult, 60+ senior.
-     * * @param age The numeric age from Agify.
-     * @return String representing the age group.
-     */
-    private String classifyAgeGroup(Integer age) {
-        // TODO: Implement switch or if-else logic
-        return null;
+    public AgeResponseDto fetchAgeData(String name) {
+        try {
+            AgeResponse apiResponse = webClient.get()
+                    .uri(uriBuilder -> uriBuilder.queryParam("name", name).build())
+                    .retrieve()
+                    .bodyToMono(AgeResponse.class)
+                    .timeout(Duration.ofSeconds(5))
+                    .block();
+
+
+            if (apiResponse == null || apiResponse.age() == null) {
+                throw new InvalidAgifyException(ERROR_MESSAGE);
+            }
+
+            AgeCategory ageGroup = AgeCategory.fromAge(apiResponse.age());
+
+            return new AgeResponseDto(
+                    apiResponse.name(),
+                    apiResponse.age(),
+                    apiResponse.count(),
+                    ageGroup
+            );
+
+        } catch (InvalidAgifyException e) {
+            throw e;
+        } catch (Exception e) {
+            // Catches timeouts, connection issues, and 4xx/5xx errors
+            throw new ApiException("Upstream or server failure");
+        }
     }
 }
