@@ -7,7 +7,6 @@ import com.mouse.profiler.model.GenderResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -77,7 +76,7 @@ public class GenderServiceTest {
         assertNotNull(result);
         assertEquals("male", result.gender());
         assertEquals(1094417, result.sampleSize()); // Checking the renamed DTO field
-        assertEquals(1.0, result.probability());
+        assertEquals(1.0, result.genderProbability());
         assertEquals("peter", result.name());
     }
 
@@ -93,7 +92,7 @@ public class GenderServiceTest {
 
         // THEN
         assertNotNull(result);
-        assertEquals(1.0, result.probability());
+        assertEquals(1.0, result.genderProbability());
     }
 
     @Test
@@ -107,7 +106,7 @@ public class GenderServiceTest {
 
         // THEN
         assertNotNull(result);
-        assertEquals(0.51, result.probability());
+        assertEquals(0.51, result.genderProbability());
     }
 
     @Test
