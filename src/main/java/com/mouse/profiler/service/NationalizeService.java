@@ -1,7 +1,13 @@
 package com.mouse.profiler.service;
 
+import com.mouse.profiler.dto.NationalityResponseDto;
+import com.mouse.profiler.exception.ApiException;
+import com.mouse.profiler.exception.InvalidNationalityException;
 import com.mouse.profiler.model.NationalityResponse;
+import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Duration;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -10,16 +16,52 @@ import java.util.List;
  */
 public class NationalizeService {
 
+
+    private final WebClient webClient;
+    private static final String NATIONALIZE_BASE_URL = " https://api.nationalize.io";
+    private static final String ERROR_MESSAGE = "Nationalize returned an invalid response";
+
+    public NationalizeService(WebClient.Builder webClientBuilder) {
+        this.webClient = webClientBuilder.baseUrl(NATIONALIZE_BASE_URL).build();
+    }
+
     /**
      * Fetches nationality data from the Nationalize API.
      * * @param name The name to be analyzed.
+     *
      * @return A DTO containing the top country_id and its probability.
-     * @throws ExternalApi502Exception if the API returns an empty country list.
      */
-    public NationalityResponse fetchNationalityData(String name) {
-        // TODO: Implement external API call
-        // TODO: Logic to find the country with the highest probability
-        return null;
+    public NationalityResponseDto fetchNationalityData(String name) {
+        try {
+            NationalityResponse apiResponse = webClient.get()
+                    .uri(uriBuilder -> uriBuilder.queryParam("name", name).build())
+                    .retrieve()
+                    .bodyToMono(NationalityResponse.class)
+                    .timeout(Duration.ofSeconds(5))
+                    .block();
+
+
+            if (apiResponse == null
+                    || apiResponse.country() == null
+                    || apiResponse.country().isEmpty()
+                    || apiResponse.count() == null) {
+                throw new InvalidNationalityException(ERROR_MESSAGE);
+            }
+
+            // Find the top country using the helper method
+            NationalityResponse.CountryProbability topCountry = findTopNationality(apiResponse.country());
+
+            return new NationalityResponseDto(
+                    apiResponse.count(),
+                    apiResponse.name(),
+                   topCountry
+            );
+
+        } catch (InvalidNationalityException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException("Upstream or server failure");
+        }
     }
 
     /**
@@ -27,8 +69,11 @@ public class NationalizeService {
      * * @param countries List of country predictions from the API.
      * @return The country object with the maximum probability value.
      */
-    private Object findTopNationality(List<Object> countries) {
-        // TODO: Use Stream.max() or sorting to find the highest probability
-        return null;
+    private NationalityResponse.CountryProbability findTopNationality(
+            List<NationalityResponse.CountryProbability> countryProbabilityList) {
+
+        return countryProbabilityList.stream()
+                .max(Comparator.comparingDouble(NationalityResponse.CountryProbability::probability))
+                .orElseThrow(() -> new InvalidNationalityException("Nationalize returned an invalid response"));
     }
 }

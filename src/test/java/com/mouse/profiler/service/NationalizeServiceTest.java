@@ -2,7 +2,6 @@ package com.mouse.profiler.service;
 
 import com.mouse.profiler.dto.NationalityResponseDto;
 import com.mouse.profiler.exception.ApiException;
-import com.mouse.profiler.exception.InvalidExternalResponseException;
 import com.mouse.profiler.exception.InvalidNationalityException;
 import com.mouse.profiler.model.NationalityResponse;
 import org.junit.jupiter.api.BeforeEach;
@@ -124,7 +123,7 @@ public class NationalizeServiceTest {
                 .thenReturn(Mono.error(new TimeoutException()));
 
         ApiException ex = assertThrows(ApiException.class, () -> nationalizeService.fetchNationalityData("slow"));
-        assertEquals(ERROR_MSG, ex.getMessage());
+        assertEquals("Upstream or server failure", ex.getMessage());
     }
 
     @Test
@@ -143,6 +142,6 @@ public class NationalizeServiceTest {
                 .thenReturn(Mono.error(new ApiException("Upstream or server failure")));
 
         ApiException ex = assertThrows(ApiException.class, () -> nationalizeService.fetchNationalityData("error"));
-        assertEquals(ERROR_MSG, ex.getMessage());
+        assertEquals("Upstream or server failure", ex.getMessage());
     }
 }
