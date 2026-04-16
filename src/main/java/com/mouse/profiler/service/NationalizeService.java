@@ -1,5 +1,9 @@
 package com.mouse.profiler.service;
 
+import com.mouse.profiler.model.NationalityResponse;
+
+import java.util.List;
+
 /**
  * Service responsible for communicating with the Nationalize API.
  * Handles nationality prediction and extracts the most likely country of origin.

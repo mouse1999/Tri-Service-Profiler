@@ -1,4 +1,7 @@
 package com.mouse.profiler.model;
 
-public record GenderResponse() {
+public record GenderResponse(int count,
+                             String name,
+                             String gender,
+                             double probability) {
 }
