@@ -1,4 +1,11 @@
 package com.mouse.profiler.dto;
 
-public record AgeResponseDto() {
+import com.mouse.profiler.enums.AgeCategory;
+
+public record AgeResponseDto(
+        String name,
+        Integer age,
+        Integer count,
+        AgeCategory ageCategory
+) {
 }
