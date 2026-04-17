@@ -41,7 +41,7 @@ public class GlobalExceptionHandler {
 
     /**
      * Requirement: 502 Bad Gateway (External API failures).
-     * This handles your Genderize/Agify/Nationalize invalid response errors.
+     * This handles Genderize/Agify/Nationalize invalid response errors.
      */
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Map<String, String>> handleUpstreamError(ApiException ex) {
