@@ -1,0 +1,59 @@
+@startuml
+
+
+    class Profile {
+        + UUID id
+        + String name
+        + String gender
+        + Integer age
+        + String ageGroup
+        + String countryId
+        + String countryName
+        + LocalDateTime createdAt
+    }
+
+    class ProfileController {
+        - ProfileManager profileManager
+        - QueryInterpreter queryInterpreter
+        + ResponseEntity getAllProfiles(filters, pageable)
+        + ResponseEntity searchProfiles(q, pageable)
+    }
+
+    class QueryInterpreter {
+        - Map<String, String> countryMap
+        + QueryCriteria interpret(String query)
+        - String extractGender(String text)
+        - AgeRange extractAgeRange(String text)
+    }
+
+    class ProfileManager {
+        - ProfileRepository repository
+        - DataSeeder seeder
+        + Page<Profile> findWithCriteria(QueryCriteria, Pageable)
+    }
+
+    interface ProfileRepository {
+        <<interface>>
+        + Page<Profile> findAll(Specification<Profile>, Pageable)
+    }
+
+    class ProfileSpecification {
+        + {static} Specification<Profile> withDynamicFilters(QueryCriteria)
+    }
+
+    class QueryCriteria {
+        + String gender
+        + Integer minAge
+        + Integer maxAge
+        + String ageGroup
+        + Double minGenderProb
+        + String countryId
+    }
+
+    ProfileController --> QueryInterpreter : uses
+    ProfileController --> ProfileManager : delegates to
+    ProfileManager --> ProfileRepository : queries
+    ProfileManager ..> ProfileSpecification : applies
+    ProfileRepository --> Profile : manages
+
+@enduml

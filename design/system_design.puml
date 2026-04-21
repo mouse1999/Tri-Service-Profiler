@@ -1,0 +1,75 @@
+@startuml
+!theme plain
+skinparam componentStyle rectangle
+skinparam packageStyle frame
+skinparam backgroundColor #FEFEFE
+skinparam component {
+  BackgroundColor #E8F0FE
+  BorderColor #1A73E8
+  FontColor #1A1A1A
+}
+skinparam database {
+  BackgroundColor #E8F0FE
+  BorderColor #1A73E8
+}
+skinparam actor {
+  BackgroundColor #1A73E8
+  FontColor white
+  BorderColor #1A73E8
+}
+skinparam note {
+  BackgroundColor #FFF3E0
+  BorderColor #FF9800
+}
+
+title <size:18><b>Insighta Labs: Queryable Intelligence Engine (HLD)</b></size>
+
+actor "Marketing Client" as User
+
+component "REST API Layer\n(Spring Boot Controller)" as API
+
+package "Intelligence Engine" {
+  component "Query Interpreter\n(Rule-Based NLP)" as Interpreter
+  component "Profile Orchestrator\n(Manager Service)" as Manager
+}
+
+package "Data Access Layer" {
+  component "Specification Builder\n(Criteria API)" as Spec
+  component "Profile Repository\n(Spring Data JPA)" as Repo
+  component "Data Seeder\n(Startup Component)" as Seeder
+}
+
+database "PostgreSQL\n(Production DB)" as DB
+
+file "External Dataset\n(2026 Profiles CSV)" as CSV
+
+' Main Data Flow
+User --> API : 1. GET /search?q=...
+API --> Interpreter : 2. Raw Text
+Interpreter --> API : 3. FilterCriteria DTO
+API --> Manager : 4. Criteria + Pageable
+Manager --> Spec : 5. Build Dynamic Predicates
+Spec --> Repo : 6. Specification<Profile>
+Repo --> DB : 7. Optimized SQL (Index Scan)
+DB --> Repo : 8. Page Results
+Repo --> API : 9. Profile DTOs
+
+' Ingestion Flow
+CSV --> Seeder : Initial Load
+Seeder --> Repo : Upsert (Name Uniqueness)
+
+note right of Interpreter
+  <b>NLP Mapping Rules:</b>
+  • "young" → [16-24]
+  • "above X" → [age > X]
+  • "from [Country]" → [ISO Map]
+end note
+
+note right of Spec
+  <b>Combined Filters:</b>
+  Handles AND/OR logic for
+  Gender, Age, Country, and
+  Probabilities in one query.
+end note
+
+@enduml

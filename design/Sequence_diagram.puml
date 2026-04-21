@@ -1,0 +1,36 @@
+@startuml
+actor Client
+participant "ProfileController" as Ctrl
+participant "QueryInterpreter" as Interpreter
+participant "ProfileManager" as Manager
+participant "ProfileSpecification" as Spec
+database "PostgreSQL" as DB
+
+Client -> Ctrl : GET /api/profiles/search?q="young males"
+activate Ctrl
+
+Ctrl -> Interpreter : interpret("young males")
+activate Interpreter
+Note right of Interpreter: Applies regex/keyword rules\n(young -> 16-24, males -> male)
+Interpreter --> Ctrl : QueryCriteria(gender=male, minAge=16, maxAge=24)
+deactivate Interpreter
+
+Ctrl -> Manager : searchProfiles(Criteria, Pageable)
+activate Manager
+
+Manager -> Spec : build(Criteria)
+activate Spec
+Spec --> Manager : Specification<Profile>
+deactivate Spec
+
+Manager -> DB : SELECT * FROM profiles WHERE...\nLIMIT 10 OFFSET 0
+activate DB
+DB --> Manager : Page<Profile>
+deactivate DB
+
+Manager --> Ctrl : PageDTO (Data + Metadata)
+deactivate Manager
+
+Ctrl --> Client : JSON Response (Status, Total, Data)
+deactivate Ctrl
+@enduml
