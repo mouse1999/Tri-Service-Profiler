@@ -2,7 +2,6 @@ package com.mouse.profiler.nlp;
 
 import com.mouse.profiler.dto.QueryCriteria;
 import com.mouse.profiler.exception.InvalidQueryException;
-import com.mouse.profiler.nlp.QueryInterpreter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -126,8 +125,6 @@ class QueryInterpreterTest {
         @ValueSource(strings = {"", " ", "!!!", "hello world", "just some text"})
         @DisplayName("Should throw exception when query has no identifiable filters")
         void testUninterpretableQueries(String input) {
-            // Requirement: return { "status": "error", "message": "Unable to interpret query" }
-            // Your service should throw a custom exception that the GlobalExceptionHandler catches.
             assertThrows(InvalidQueryException.class, () -> interpreter.interpret(input));
         }
 
