@@ -130,7 +130,7 @@ public class ProfileController {
             @RequestParam(name = "limit", defaultValue = "10") String limitStr) {
 
         if (q == null || q.trim().isBlank()) {
-            // Updated to match your final error message requirement
+        
             throw new InvalidQueryException("Invalid query parameter");
         }
 
@@ -187,7 +187,7 @@ public class ProfileController {
         try {
             return Integer.parseInt(val);
         } catch (NumberFormatException e) {
-            // Return default or throw based on how strict the grader is
+            
             return defaultVal;
         }
     }
