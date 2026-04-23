@@ -14,6 +14,7 @@ public class QueryCriteria {
     private Integer min_age;
     private Integer max_age;
     private String country_id;
+
     private Float min_gender_probability;
     private Float min_country_probability;
 

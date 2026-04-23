@@ -58,6 +58,7 @@ public class ProfileSpecification {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("countryProbability"), criteria.getMin_country_probability()));
             }
 
+
             // Combine all active predicates with AND logic
             return cb.and(predicates.toArray(new Predicate[0]));
         };
