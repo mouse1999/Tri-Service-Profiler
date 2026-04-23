@@ -1,13 +1,12 @@
 package com.mouse.profiler.controller;
 
+import com.mouse.profiler.dto.ErrorResponseDTO;
 import com.mouse.profiler.dto.ProfileExistDto;
-import com.mouse.profiler.exception.ApiException;
-import com.mouse.profiler.exception.InvalidInputException;
-import com.mouse.profiler.exception.ProfileAlreadyExistsException;
-import com.mouse.profiler.exception.ProfileNotFoundException;
+import com.mouse.profiler.exception.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.validation.BindException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -91,4 +90,23 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("status", "error", "message", "An unexpected server error occurred"));
     }
+
+    @ExceptionHandler(BindException.class)
+    public ResponseEntity<ErrorResponseDTO> handleBindException(BindException ex) {
+        // This catches ?min_age=twenty or ?min_gender_probability=high
+        return ResponseEntity
+                .status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(new ErrorResponseDTO("error", " Invalid parameter type"));
+    }
+
+
+    @ExceptionHandler(InvalidQueryException.class)
+    public ResponseEntity<ErrorResponseDTO> handleInvalidQuery() {
+        return ResponseEntity
+                .status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(new ErrorResponseDTO("error", "Invalid query parameters"));
+    }
+
+
+
 }
