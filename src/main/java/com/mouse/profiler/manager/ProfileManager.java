@@ -1,19 +1,22 @@
 package com.mouse.profiler.manager;
 
-import com.mouse.profiler.dto.AgeResponseDto;
-import com.mouse.profiler.dto.GenderResponseDto;
-import com.mouse.profiler.dto.NationalityResponseDto;
-import com.mouse.profiler.dto.ProfileDto;
+import com.mouse.profiler.dto.*;
 import com.mouse.profiler.entity.Profile;
 import com.mouse.profiler.exception.ApiException;
 import com.mouse.profiler.exception.ProfileAlreadyExistsException;
 import com.mouse.profiler.exception.ProfileNotFoundException;
+import com.mouse.profiler.nlp.QueryInterpreter;
 import com.mouse.profiler.repository.ProfileManagerRepository;
 import com.mouse.profiler.service.AgeService;
 import com.mouse.profiler.service.GenderService;
 import com.mouse.profiler.service.NationalizeService;
+import com.mouse.profiler.utils.ProfileSpecification;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j; // Lombok Logger
+import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +37,7 @@ public class ProfileManager {
     private final AgeService ageService;
     private final NationalizeService nationalizeService;
     private final ProfileManagerRepository managerRepository;
+    private final QueryInterpreter interpreter;
 
     @Transactional
     public ProfileDto createProfile(String name) {
@@ -71,13 +75,13 @@ public class ProfileManager {
             Profile profile = Profile.builder()
                     .name(nameLowerCase)
                     .gender(genderData.gender())
-                    .genderProbability(genderData.genderProbability())
-                    .sampleSize(genderData.sampleSize())
+                    .genderProbability((float) genderData.genderProbability())
+//                    .sampleSize(genderData.sampleSize())
                     .age(ageData.age())
                     .ageGroup(ageData.ageCategory().getLabel())
                     .countryId(natData.countryProbability().countryId())
-                    .countryProbability(natData.countryProbability().probability())
-                    .createdAt(ZonedDateTime.now(ZoneOffset.UTC))
+                    .countryProbability((float) natData.countryProbability().probability())
+                    .createdAt(ZonedDateTime.now(ZoneOffset.UTC).toOffsetDateTime())
                     .build();
 
             Profile savedProfile = managerRepository.save(profile);
@@ -128,5 +132,32 @@ public class ProfileManager {
         }
         managerRepository.deleteById(id);
         log.info("Manager: Successfully deleted profile with ID: {}", id);
+    }
+
+
+    public NewProfileResponseDto<Profile> searchWithNLQ(String queryText, Pageable pageable) {
+        QueryCriteria criteria = interpreter.interpret(queryText);
+        return executeSearch(criteria, pageable);
+    }
+
+    public NewProfileResponseDto<Profile> searchWithCriteria(QueryCriteria criteria, Pageable pageable) {
+        return executeSearch(criteria, pageable);
+    }
+
+    private NewProfileResponseDto<Profile> executeSearch(QueryCriteria criteria, Pageable pageable) {
+        Specification<Profile> spec = ProfileSpecification.build(criteria);
+        Page<Profile> resultPage = managerRepository.findAll(spec, pageable);
+
+        // Check if the page has no data
+        if (resultPage.isEmpty()) {
+            throw new ProfileNotFoundException("Profile not found");
+        }
+
+        return NewProfileResponseDto.success(
+                resultPage.getContent(),
+                resultPage.getNumber() + 1,
+                resultPage.getSize(),
+                resultPage.getTotalElements()
+        );
     }
 }
