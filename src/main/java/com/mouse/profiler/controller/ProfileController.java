@@ -1,12 +1,14 @@
 package com.mouse.profiler.controller;
 
-import com.mouse.profiler.dto.ProfileDto;
-import com.mouse.profiler.dto.ProfileListResponseDto;
-import com.mouse.profiler.dto.ProfileResponseDto;
+import com.mouse.profiler.dto.*;
 import com.mouse.profiler.entity.Profile;
 import com.mouse.profiler.exception.InvalidInputException;
+import com.mouse.profiler.exception.InvalidQueryException;
 import com.mouse.profiler.manager.ProfileManager;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -59,7 +61,7 @@ public class ProfileController {
                 .body(new ProfileResponseDto("success", ProfileDto.fromEntity(profile)));
     }
 
-    @GetMapping
+    @GetMapping("/all")
     public ResponseEntity<ProfileListResponseDto> getAllProfiles(
             @RequestParam(required = false) String gender,
             @RequestParam(required = false, name = "country_id") String countryId,
@@ -80,4 +82,106 @@ public class ProfileController {
     public void deleteProfile(@PathVariable UUID id) {
         profileManager.deleteProfile(id);
     }
+
+
+
+    @GetMapping
+    public ResponseEntity<NewProfileResponseDto<Profile>> getProfiles(
+            QueryCriteria criteria,
+            @RequestParam(name = "sort_by", defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String order,
+            @RequestParam(name = "page", defaultValue = "1") String pageStr,
+            @RequestParam(name = "limit", defaultValue = "10") String limitStr) {
+
+        // 1. Manual Parsing of Pagination (To prevent TypeMismatchException)
+        int page = parseOrDefault(pageStr, 1);
+        int limit = parseOrDefault(limitStr, 10);
+
+        // 2. Manual Range Checks for Pagination
+        if (page < 1) page = 1;
+        if (limit < 1) limit = 1;
+        if (limit > 50) limit = 50; // Requirement: max 50
+
+        // 3. Manual Sorting Validation
+        validateSortField(sortBy);
+
+        // 4. Manual DTO Validation
+        criteria.validate();
+
+        // 5. Execute
+        Pageable pageable = createPageable(page, limit, sortBy, order);
+        return ResponseEntity.ok(profileManager.searchWithCriteria(criteria, pageable));
+    }
+
+
+    /**
+     * 4: Natural Language Query (NLQ)
+     * GET /api/profiles/search?q=young males from nigeria
+     */
+    @GetMapping("/search")
+    public ResponseEntity<NewProfileResponseDto<Profile>> searchNLQ(
+            @RequestParam(name = "q", required = false) String q,
+            @RequestParam(name = "sort_by", defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String order,
+            @RequestParam(name = "page", defaultValue = "1") String pageStr,
+            @RequestParam(name = "limit", defaultValue = "10") String limitStr) {
+
+        // 1. Manual Validation for the 'q' parameter
+        if (q == null || q.trim().isBlank()) {
+            throw new IllegalArgumentException("Missing or empty parameter");
+        }
+
+        if (q.length() > 100) {
+            throw new InvalidQueryException("Search query is too long (max 100 characters)");
+        }
+
+        // 2. Manual Parsing and Range Validation for Pagination
+        int page = parseOrDefault(pageStr, 1);
+        int limit = parseOrDefault(limitStr, 10);
+
+        if (page < 1) page = 1;
+        if (limit < 1) limit = 1;
+        if (limit > 50) limit = 50; // Requirement: max 50
+
+        // 3. Manual Sorting Validation
+        validateSortField(sortBy);
+
+        // 4. Build Pageable and Execute
+        Pageable pageable = createPageable(page, limit, sortBy, order);
+
+        return ResponseEntity.ok(profileManager.searchWithNLQ(q.trim(), pageable));
+    }
+
+    /**
+     * Reusable helper to handle pagination and sorting logic.
+     */
+    private Pageable createPageable(int page, int limit, String sortBy, String order) {
+        int validatedLimit = Math.min(limit, 50);
+        int adjustedPage = Math.max(page - 1, 0);
+
+        Sort sort = order.equalsIgnoreCase("asc")
+                ? Sort.by(sortBy).ascending()
+                : Sort.by(sortBy).descending();
+
+        return PageRequest.of(adjustedPage, validatedLimit, sort);
+    }
+
+
+    private void validateSortField(String sortBy) {
+        List<String> allowed = List.of("age", "created_at", "gender_probability", "createdAt");
+        if (!allowed.contains(sortBy)) {
+            throw new InvalidQueryException("Invalid sort_by field: " + sortBy);
+        }
+    }
+
+    private int parseOrDefault(String val, int defaultVal) {
+        try {
+            return Integer.parseInt(val);
+        } catch (NumberFormatException e) {
+            return defaultVal; // Or throw InvalidQueryException if you prefer strictness todo
+        }
+    }
+
+
+
 }
