@@ -30,15 +30,15 @@ class QueryInterpreterTest {
             QueryCriteria result = interpreter.interpret("young males");
             assertNotNull(result);
             assertEquals("male", result.getGender());
-            assertEquals(16, result.getMinAge());
-            assertEquals(24, result.getMaxAge());
+            assertEquals(16, result.getMin_age());
+            assertEquals(24, result.getMax_age());
         }
 
         @Test
         @DisplayName("Should map 'people from angola' to country code AO")
         void testCountryMapping() {
             QueryCriteria result = interpreter.interpret("people from angola");
-            assertEquals("AO", result.getCountryId());
+            assertEquals("AO", result.getCountry_id());
         }
     }
 
@@ -51,8 +51,8 @@ class QueryInterpreterTest {
         void testTripleCombination() {
             QueryCriteria result = interpreter.interpret("adult males from kenya");
             assertEquals("male", result.getGender());
-            assertEquals("adult", result.getAgeGroup());
-            assertEquals("KE", result.getCountryId());
+            assertEquals("adult", result.getAge_group());
+            assertEquals("KE", result.getCountry_id());
         }
 
         @Test
@@ -61,8 +61,8 @@ class QueryInterpreterTest {
             QueryCriteria result = interpreter.interpret("male and female teenagers above 17");
             // Requirement says "male and female" - since our entity gender is singular,
             // rule-based logic usually defaults to 'both' or ignores gender if both present.
-            assertEquals("teenager", result.getAgeGroup());
-            assertEquals(17, result.getMinAge());
+            assertEquals("teenager", result.getAge_group());
+            assertEquals(17, result.getMin_age());
         }
 
         @ParameterizedTest
@@ -75,7 +75,7 @@ class QueryInterpreterTest {
         void testAgeComparisonSynonyms(String input, String expectedGender, Integer expectedMinAge) {
             QueryCriteria result = interpreter.interpret(input);
             if (expectedGender != null) assertEquals(expectedGender, result.getGender());
-            assertEquals(expectedMinAge, result.getMinAge());
+            assertEquals(expectedMinAge, result.getMin_age());
         }
     }
 
@@ -88,7 +88,7 @@ class QueryInterpreterTest {
         void testCaseInsensitivity() {
             QueryCriteria result = interpreter.interpret("YOUNG MALES FROM NIGERIA");
             assertEquals("male", result.getGender());
-            assertEquals("NG", result.getCountryId());
+            assertEquals("NG", result.getCountry_id());
         }
 
         @Test
@@ -97,14 +97,14 @@ class QueryInterpreterTest {
             // "Searching for", "who are", "in" are noise words
             QueryCriteria result = interpreter.interpret("Searching for males who are in nigeria");
             assertEquals("male", result.getGender());
-            assertEquals("NG", result.getCountryId());
+            assertEquals("NG", result.getCountry_id());
         }
 
         @Test
         @DisplayName("Edge Case: Multi-word country mapping (e.g., 'United Kingdom')")
         void testMultiWordCountry() {
             QueryCriteria result = interpreter.interpret("people from united kingdom");
-            assertEquals("GB", result.getCountryId());
+            assertEquals("GB", result.getCountry_id());
         }
 
         @Test
@@ -112,8 +112,8 @@ class QueryInterpreterTest {
         void testOrderIndependency() {
             QueryCriteria result = interpreter.interpret("nigeria from males young");
             assertEquals("male", result.getGender());
-            assertEquals("NG", result.getCountryId());
-            assertEquals(16, result.getMinAge());
+            assertEquals("NG", result.getCountry_id());
+            assertEquals(16, result.getMin_age());
         }
     }
 
