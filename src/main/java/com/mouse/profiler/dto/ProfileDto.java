@@ -2,7 +2,7 @@ package com.mouse.profiler.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.mouse.profiler.entity.Profile;
-import java.time.ZonedDateTime;
+
 import java.util.UUID;
 
 /**
@@ -15,7 +15,7 @@ public record ProfileDto(
         String gender,
 
         @JsonProperty("gender_probability")
-        Double genderProbability,
+        Float genderProbability,
 
         @JsonProperty("sample_size")
         Integer sampleSize,
@@ -29,10 +29,10 @@ public record ProfileDto(
         String countryId,
 
         @JsonProperty("country_probability")
-        Double countryProbability,
+        Float countryProbability,
 
         @JsonProperty("created_at")
-        ZonedDateTime createdAt
+        java.time.OffsetDateTime createdAt
 ) {
     /**
      * Static factory method to easily convert an Entity to this DTO.
