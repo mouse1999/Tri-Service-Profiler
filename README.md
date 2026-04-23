@@ -175,7 +175,7 @@ To update the system's starting data, modify:
 I encountered several "human" errors during Task 2 that required deep-diving into Spring Boot's internal mechanics:
 
 ### 1. The "Snake-to-Camel" Mapping Gap
-**Problem:** I wanted the API to use `min_age` (snake_case) to follow web standards, but Java DTO used `minAge` (camelCase). Using `@JsonProperty` worked for POST bodies, but **failed for GET query parameters** because Spring's Data Binder ignores Jackson annotations.
+**Problem:** The API used snake_case following web standards, but Java DTO used camelCase. Using `@JsonProperty` worked for POST bodies, but **failed for GET query parameters** because Spring's Data Binder ignores Jackson annotations.
 **Solution:** I aligned the `QueryCriteria` DTO fields to use `snake_case` exactly. We then manually mapped these to the `camelCase` entity fields inside the `ProfileSpecification` using `root.get("countryId")`.
 
 ### 2. The Sorting "PropertyReferenceException"
