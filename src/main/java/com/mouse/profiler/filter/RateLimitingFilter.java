@@ -99,7 +99,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
      * automatically based on the bucket's refill schedule.</p>
      * @param request  the original request (for the path)
      * @param response the response to write the 429 body into
-     * @param probe    the Bucket4j probe containing refill timing information
+     * @param probe the Bucket4j probe containing refill timing information
      * @throws IOException if writing to the response output stream fails
      */
     private void rejectRequest(HttpServletRequest request,

@@ -49,7 +49,6 @@ import java.io.IOException;
 @Order(1)
 public class RequestLoggingFilter extends OncePerRequestFilter {
 
-    private static final Logger log = LoggerFactory.getLogger(RequestLoggingFilter.class);
 
     /**
      * Core filter method. Called exactly once per request.
