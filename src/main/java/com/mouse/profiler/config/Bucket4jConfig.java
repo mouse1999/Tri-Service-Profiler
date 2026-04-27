@@ -1,14 +1,21 @@
 package com.mouse.profiler.config;
 
 
+import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
+import io.github.bucket4j.redis.lettuce.cas.LettuceBasedProxyManager;
 import io.lettuce.core.RedisClient;
 
+import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.codec.ByteArrayCodec;
+import io.lettuce.core.codec.RedisCodec;
+import io.lettuce.core.codec.StringCodec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import io.github.bucket4j.BucketConfiguration;
 
+import java.time.Duration;
 import java.util.function.Supplier;
 
 /**
@@ -55,7 +62,14 @@ public class Bucket4jConfig {
      */
     @Bean
     public ProxyManager<String> lettuceProxyManager(RedisClient redisClient) {
-        return null; // TODO
+        // Create Redis codec that uses String keys and byte[] values
+        RedisCodec<String, byte[]> codec = RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE);
+
+        // Open a Redis connection with the specified codec
+        StatefulRedisConnection<String, byte[]> connection = redisClient.connect(codec);
+
+        // Build and return the ProxyManager
+        return LettuceBasedProxyManager.builderFor(connection).build();
     }
 
     /**
@@ -70,7 +84,18 @@ public class Bucket4jConfig {
      */
     @Bean
     public Supplier<BucketConfiguration> authBucketConfiguration() {
-        return null; // TODO
+        return () -> {
+            // Create bandwidth limit with greedy refill
+            Bandwidth limit = Bandwidth.builder()
+                    .capacity(authRequests)
+                    .refillGreedy(authRequests, Duration.ofMinutes(authDurationMinutes))
+                    .build();
+
+            // Build and return the bucket configuration
+            return BucketConfiguration.builder()
+                    .addLimit(limit)
+                    .build();
+        };
     }
 
     /**
@@ -84,6 +109,17 @@ public class Bucket4jConfig {
      */
     @Bean
     public Supplier<BucketConfiguration> apiBucketConfiguration() {
-        return null; // TODO
+        return () -> {
+            // Create bandwidth limit with greedy refill
+            Bandwidth limit = Bandwidth.builder()
+                    .capacity(apiRequests)
+                    .refillGreedy(apiRequests, Duration.ofMinutes(apiDurationMinutes))
+                    .build();
+
+            // Build and return the bucket configuration
+            return BucketConfiguration.builder()
+                    .addLimit(limit)
+                    .build();
+        };
     }
 }
