@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Duration;
+
 /**
  * Configures the Redis connection using the Lettuce client.
  *
@@ -16,12 +18,21 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 public class RedisConfig {
-
-    @Value("${spring.data.redis.host}")
+    @Value("${spring.data.redis.host:localhost}")
     private String redisHost;
 
-    @Value("${spring.data.redis.port}")
+    @Value("${spring.data.redis.port:6379}")
     private int redisPort;
+
+    @Value("${spring.data.redis.password:}")
+    private String redisPassword;
+
+    @Value("${spring.data.redis.database:0}")
+    private int redisDatabase;
+
+    @Value("${spring.data.redis.timeout:2000}")
+    private long timeoutMillis;
+
 
     /**
      * Creates and exposes a Lettuce {@link RedisClient} as a Spring bean.
@@ -33,6 +44,18 @@ public class RedisConfig {
      */
     @Bean
     public RedisClient redisClient() {
-        return null; // TODO
+        RedisURI.Builder uriBuilder = RedisURI.builder()
+                .withHost(redisHost)
+                .withPort(redisPort)
+                .withDatabase(redisDatabase)
+                .withTimeout(Duration.ofMillis(timeoutMillis));
+
+        if (redisPassword != null && !redisPassword.trim().isEmpty()) {
+            uriBuilder.withPassword(redisPassword.toCharArray());
+        }
+
+        RedisURI redisUri = uriBuilder.build();
+
+        return RedisClient.create(redisUri);
     }
 }
