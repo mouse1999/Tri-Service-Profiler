@@ -1,6 +1,8 @@
 package com.mouse.profiler.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mouse.profiler.dto.ErrorResponseDTO;
+import io.github.bucket4j.Bucket;
 import io.github.bucket4j.BucketConfiguration;
 import io.github.bucket4j.ConsumptionProbe;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
@@ -9,11 +11,14 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.web.server.ErrorPageRegistrar;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
@@ -57,8 +62,8 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     /**
      * Core filter method. Resolves which bucket to use, attempts to
      * consume a token, and either allows or rejects the request.
-     * @param request     the incoming HTTP request
-     * @param response    the HTTP response to write to on rejection
+     * @param request  the incoming HTTP request
+     * @param response  the HTTP response to write to on rejection
      * @param filterChain the remaining filter chain
      * @throws ServletException if a downstream servlet error occurs
      * @throws IOException      if writing the response body fails
@@ -68,7 +73,38 @@ public class RateLimitingFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
-        // TODO
+
+        // Get client identifier (IP)
+        String clientId = resolveClientIdentifier(request);
+
+        // Determine if this is an auth route
+        boolean isAuthPath = request.getRequestURI() != null &&
+                request.getRequestURI().startsWith(AUTH_PATH_PREFIX);
+
+        // Step 3: Build bucket key (separate buckets for auth and api per IP)
+        String bucketKey = (isAuthPath ? "auth:" : "api:") + clientId;
+
+        // Choose the appropriate bucket configuration
+        Supplier<BucketConfiguration> configSupplier =
+                isAuthPath ? authBucketConfiguration : apiBucketConfiguration;
+
+        // Get or create bucket from Redis
+        Bucket bucket = proxyManager.builder()
+                .build(bucketKey, configSupplier);
+
+        // Try to consume 1 token
+        ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
+
+        if (probe.isConsumed()) {
+            // Request allowed
+            response.addHeader("X-Rate-Limit-Remaining",
+                    String.valueOf(probe.getRemainingTokens()));
+
+            filterChain.doFilter(request, response);
+        } else {
+            // Rate limit exceeded
+            rejectRequest(request, response, probe);
+        }
     }
 
     /**
@@ -86,7 +122,14 @@ public class RateLimitingFilter extends OncePerRequestFilter {
      * @return a string identifying the client, used as the Redis bucket key
      */
     private String resolveClientIdentifier(HttpServletRequest request) {
-        return null; // TODO
+        String forwarded = request.getHeader("X-Forwarded-For");
+
+        if (forwarded != null && !forwarded.isBlank()) {
+            // Take the first IP if multiple are present (leftmost = original client)
+            return forwarded.split(",")[0].trim();
+        }
+        // Fallback to remote address
+        return request.getRemoteAddr();
     }
 
     /**
@@ -105,6 +148,19 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     private void rejectRequest(HttpServletRequest request,
                                HttpServletResponse response,
                                ConsumptionProbe probe) throws IOException {
-        // TODO
+
+        long retryAfterSeconds = TimeUnit.NANOSECONDS.toSeconds(
+                probe.getNanosToWaitForRefill());
+
+        response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+        response.setContentType("application/json");
+        response.addHeader("Retry-After", String.valueOf(retryAfterSeconds));
+
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO(
+                "error",
+                "Too Many Requests"
+        );
+
+        objectMapper.writeValue(response.getWriter(), errorResponse);
     }
 }
