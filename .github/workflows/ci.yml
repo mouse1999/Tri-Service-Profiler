@@ -21,12 +21,20 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
+      - name: Setup Docker
+        run: |
+          docker --version
+          docker ps
+          docker run --rm hello-world
+
       - name: Run Unit + Integration Tests
         run: mvn clean verify -Dspring.profiles.active=test
         env:
           TESTCONTAINERS_RYUK_DISABLED: false
           DOCKER_HOST: unix:///var/run/docker.sock
           TESTCONTAINERS_STARTUP_TIMEOUT: 120
+          TESTCONTAINERS_CHECKS_DISABLE: true
+          TESTCONTAINERS_STARTUP_MAX_ATTEMPTS: 3
 
       - name: Upload test reports on failure
         if: failure()
@@ -37,3 +45,8 @@ jobs:
             ~/.testcontainers/*
             **/target/surefire-reports/*
             **/target/failsafe-reports/*
+            **/target/surefire-reports/*.xml
+
+      - name: Debug Docker containers on failure
+        if: failure()
+        run: docker ps -a
