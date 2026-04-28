@@ -33,8 +33,10 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: false
           DOCKER_HOST: unix:///var/run/docker.sock
           TESTCONTAINERS_STARTUP_TIMEOUT: 120
-          TESTCONTAINERS_CHECKS_DISABLE: true
-          TESTCONTAINERS_STARTUP_MAX_ATTEMPTS: 3
+          TESTCONTAINERS_CHECKS_DISABLE: false
+          TESTCONTAINERS_STARTUP_MAX_ATTEMPTS: 5
+          # Force rate limiting enabled for tests
+          RATE_LIMITING_ENABLED: true
 
       - name: Upload test reports on failure
         if: failure()
