@@ -35,6 +35,12 @@ public abstract class BaseIntegrationTest {
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
         registry.add("spring.data.redis.timeout", () -> "2s");
         registry.add("rate.limiting.enabled", () -> "true");
+        registry.add("spring.data.redis.timeout", () -> "60s");
+        registry.add("spring.data.redis.lettuce.shutdown-timeout", () -> "30s");
+        registry.add("rate.limit.auth.duration.seconds", () -> "5");
+        registry.add("rate.limit.auth.duration.minutes", () -> "0");
+        registry.add("rate.limit.api.duration.seconds", () -> "5");
+        registry.add("rate.limit.api.duration.minutes", () -> "0");
     }
 
     @Autowired(required = false)
