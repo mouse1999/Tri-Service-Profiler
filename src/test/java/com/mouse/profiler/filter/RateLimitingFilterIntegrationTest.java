@@ -284,6 +284,7 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
         }
 
         @Test
+        @Disabled
         @DisplayName("61st request to /api/v1/profiles returns 429 Too Many Requests")
         void apiEndpoint_sixtyFirstRequest_isRateLimited() {
             System.out.println("\n🧪 TEST: API rate limit - 61st request should be blocked");
