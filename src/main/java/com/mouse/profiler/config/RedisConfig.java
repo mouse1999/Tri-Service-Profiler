@@ -3,6 +3,7 @@ package com.mouse.profiler.config;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -18,6 +19,7 @@ import java.time.Duration;
  */
 @Configuration
 public class RedisConfig {
+
     @Value("${spring.data.redis.host:localhost}")
     private String redisHost;
 
@@ -30,9 +32,8 @@ public class RedisConfig {
     @Value("${spring.data.redis.database:0}")
     private int redisDatabase;
 
-    @Value("${spring.data.redis.timeout:2s}")
+    @Value("${spring.data.redis.timeout:30s}")
     private Duration timeout;
-
 
     /**
      * Creates and exposes a Lettuce {@link RedisClient} as a Spring bean.
@@ -40,9 +41,14 @@ public class RedisConfig {
      * This bean is injected into {@code Bucket4jConfig} where it is used
      * to create the Redis-backed proxy that Bucket4j reads and writes
      * rate limit counters through.
+     *
+     * <p>This bean is only created when rate limiting is enabled,
+     * preventing unnecessary Redis connections in development.</p>
+     *
      * @return a configured Lettuce RedisClient ready to accept connections
      */
     @Bean
+    @ConditionalOnProperty(name = "rate.limiting.enabled", havingValue = "true", matchIfMissing = false)
     public RedisClient redisClient() {
         RedisURI.Builder uriBuilder = RedisURI.builder()
                 .withHost(redisHost)
