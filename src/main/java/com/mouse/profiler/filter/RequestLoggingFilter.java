@@ -5,8 +5,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -45,7 +44,7 @@ import java.io.IOException;
  * is later rejected by another filter.</p>
  */
 @Component
-
+@Slf4j
 @Order(1)
 public class RequestLoggingFilter extends OncePerRequestFilter {
 
@@ -63,6 +62,21 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
-        // TODO
+
+        long startTime = System.currentTimeMillis();
+        String method = request.getMethod();
+        String endpoint = request.getRequestURI();
+
+        try {
+            // Pass the request down the filter chain
+            filterChain.doFilter(request, response);
+        } finally {
+            // Always log the request, even if an exception occurred
+            long duration = System.currentTimeMillis() - startTime;
+            int status = response.getStatus();
+
+            log.info("method={} endpoint={} status={} duration={}ms",
+                    method, endpoint, status, duration);
+        }
     }
 }
