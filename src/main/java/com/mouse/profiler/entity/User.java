@@ -53,7 +53,7 @@ public class User {
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
-        // Generating UUID v7 using f4b6a3 library
+
         if (this.id == null) {
             this.id = Generators.timeBasedEpochGenerator().generate();
         }
