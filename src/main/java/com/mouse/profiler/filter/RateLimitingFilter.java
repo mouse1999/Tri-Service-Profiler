@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -35,6 +36,9 @@ public class RateLimitingFilter extends OncePerRequestFilter {
 
     // Counter to track request sequence across all requests
     private static final AtomicInteger requestCounter = new AtomicInteger(0);
+
+    // Locks for each bucket key to prevent race conditions
+    private final ConcurrentHashMap<String, Object> bucketLocks = new ConcurrentHashMap<>();
 
     private final ProxyManager<String> proxyManager;
     private final Supplier<BucketConfiguration> authBucketConfiguration;
@@ -76,111 +80,128 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         log.info("   - bucketKey: {}", bucketKey);
         log.info("   - rate limit type: {}", isAuthPath ? "AUTH" : "API");
 
-        // Get the appropriate configuration supplier
-        Supplier<BucketConfiguration> configSupplier = isAuthPath ? authBucketConfiguration : apiBucketConfiguration;
+        // Get or create a lock for this bucket key
+        Object bucketLock = bucketLocks.computeIfAbsent(bucketKey, k -> new Object());
 
-        // Log configuration details
-        BucketConfiguration config = null;
-        try {
-            config = configSupplier.get();
-            long capacity = config.getBandwidths()[0].getCapacity();
-            long refillTokens = config.getBandwidths()[0].getRefillTokens();
-            long refillPeriodNanos = config.getBandwidths()[0].getRefillPeriodNanos();
-            long refillPeriodSeconds = refillPeriodNanos / 1_000_000_000;
+        // Synchronize on bucket key to ensure atomic operations
+        synchronized (bucketLock) {
+            log.info("🔒 Acquired lock for bucket key: {}", bucketKey);
 
-            log.info("\n⚙️ BUCKET CONFIGURATION:");
-            log.info("   - Capacity: {} requests", capacity);
-            log.info("   - Refill Tokens: {} per {} seconds", refillTokens, refillPeriodSeconds);
-            log.info("   - Config Source: {}", isAuthPath ? "authBucketConfiguration" : "apiBucketConfiguration");
-        } catch (Exception e) {
-            log.error("❌ FAILED TO GET BUCKET CONFIGURATION: {}", e.getMessage(), e);
-        }
+            // Get the appropriate configuration supplier
+            Supplier<BucketConfiguration> configSupplier = isAuthPath ? authBucketConfiguration : apiBucketConfiguration;
 
-        try {
-            log.info("\n🔨 BUILDING BUCKET for key: '{}'", bucketKey);
+            // Log configuration details
+            BucketConfiguration config = null;
+            try {
+                config = configSupplier.get();
+                long capacity = config.getBandwidths()[0].getCapacity();
+                long refillTokens = config.getBandwidths()[0].getRefillTokens();
+                long refillPeriodNanos = config.getBandwidths()[0].getRefillPeriodNanos();
+                long refillPeriodSeconds = refillPeriodNanos / 1_000_000_000;
 
-            long beforeBuild = System.currentTimeMillis();
-            Bucket bucket = proxyManager.builder()
-                    .build(bucketKey, configSupplier);
-            long buildTime = System.currentTimeMillis() - beforeBuild;
-
-            log.info("✅ BUCKET CREATED for key: '{}' (took {} ms)", bucketKey, buildTime);
-
-            // Get current bucket state BEFORE consuming
-            long availableTokensBefore = bucket.getAvailableTokens();
-            log.info("📊 BUCKET STATE BEFORE CONSUMPTION:");
-            log.info("   - Available tokens before: {}", availableTokensBefore);
-            log.info("   - Bucket key: {}", bucketKey);
-            log.info("   - Request #: {}", requestNumber);
-
-            log.info("\n🎫 TRYING TO CONSUME 1 TOKEN...");
-            long beforeConsume = System.currentTimeMillis();
-            ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
-            long consumeTime = System.currentTimeMillis() - beforeConsume;
-
-            long remainingTokens = probe.getRemainingTokens();
-            boolean isConsumed = probe.isConsumed();
-            long nanosToWait = probe.getNanosToWaitForRefill();
-            long secondsToWait = TimeUnit.NANOSECONDS.toSeconds(nanosToWait);
-
-            log.info("\n📊 CONSUMPTION RESULT (took {} ms):", consumeTime);
-            log.info("   - Token Consumed: {}", isConsumed);
-            log.info("   - Remaining Tokens: {}", remainingTokens);
-            log.info("   - Time to wait for refill: {} nanoseconds ({} seconds)", nanosToWait, secondsToWait);
-
-            // Calculate expected remaining
-            long expectedRemaining = availableTokensBefore - (isConsumed ? 1 : 0);
-            log.info("   - Expected remaining after: {}", expectedRemaining);
-
-            if (remainingTokens != expectedRemaining) {
-                log.warn("⚠️ REMAINING TOKENS MISMATCH! Expected: {}, Actual: {}", expectedRemaining, remainingTokens);
+                log.info("\n⚙️ BUCKET CONFIGURATION:");
+                log.info("   - Capacity: {} requests", capacity);
+                log.info("   - Refill Tokens: {} per {} seconds", refillTokens, refillPeriodSeconds);
+                log.info("   - Config Source: {}", isAuthPath ? "authBucketConfiguration" : "apiBucketConfiguration");
+            } catch (Exception e) {
+                log.error("❌ FAILED TO GET BUCKET CONFIGURATION: {}", e.getMessage(), e);
             }
 
-            if (isConsumed) {
-                log.info("\n✅ REQUEST ALLOWED - Token consumed successfully");
-                log.info("   - Before: {} tokens", availableTokensBefore);
-                log.info("   - After: {} tokens", remainingTokens);
-                log.info("   - Decrease: {} tokens", availableTokensBefore - remainingTokens);
+            try {
+                log.info("\n🔨 BUILDING BUCKET for key: '{}'", bucketKey);
 
-                response.addHeader("X-Rate-Limit-Remaining", String.valueOf(remainingTokens));
-                response.addHeader("X-Rate-Limit-Bucket", bucketKey);
-                response.addHeader("X-Request-Sequence", String.valueOf(requestNumber));
+                long beforeBuild = System.currentTimeMillis();
+                Bucket bucket = proxyManager.builder()
+                        .build(bucketKey, configSupplier);
+                long buildTime = System.currentTimeMillis() - beforeBuild;
 
-                long processingTime = System.currentTimeMillis() - requestStartTime;
-                log.info("   - Request processing time: {} ms", processingTime);
+                log.info("✅ BUCKET CREATED for key: '{}' (took {} ms)", bucketKey, buildTime);
 
-                filterChain.doFilter(request, response);
+                // Get current bucket state BEFORE consuming (inside lock for consistency)
+                long availableTokensBefore = bucket.getAvailableTokens();
+                log.info("📊 BUCKET STATE BEFORE CONSUMPTION:");
+                log.info("   - Available tokens before: {}", availableTokensBefore);
+                log.info("   - Bucket key: {}", bucketKey);
+                log.info("   - Request #: {}", requestNumber);
 
-                log.info("✅ REQUEST COMPLETED SUCCESSFULLY: {} {} (Total time: {} ms)",
-                        method, requestURI, System.currentTimeMillis() - requestStartTime);
-            } else {
-                log.warn("\n🚫 REQUEST BLOCKED - Rate limit exceeded!");
-                log.warn("   - Bucket exhausted for key: {}", bucketKey);
-                log.warn("   - Available before: {} tokens", availableTokensBefore);
-                log.warn("   - Need to wait {} seconds before next request", secondsToWait);
-                log.warn("   - Request #{} was blocked (would have been request #{} for this bucket)",
-                        requestNumber, (config != null ? config.getBandwidths()[0].getCapacity() - availableTokensBefore + 1 : "?"));
-                rejectRequest(request, response, probe);
+                log.info("\n🎫 TRYING TO CONSUME 1 TOKEN...");
+                long beforeConsume = System.currentTimeMillis();
+                ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
+                long consumeTime = System.currentTimeMillis() - beforeConsume;
+
+                long remainingTokens = probe.getRemainingTokens();
+                boolean isConsumed = probe.isConsumed();
+                long nanosToWait = probe.getNanosToWaitForRefill();
+                long secondsToWait = TimeUnit.NANOSECONDS.toSeconds(nanosToWait);
+
+                log.info("\n📊 CONSUMPTION RESULT (took {} ms):", consumeTime);
+                log.info("   - Token Consumed: {}", isConsumed);
+                log.info("   - Remaining Tokens: {}", remainingTokens);
+                log.info("   - Time to wait for refill: {} nanoseconds ({} seconds)", nanosToWait, secondsToWait);
+
+                // Calculate expected remaining
+                long expectedRemaining = availableTokensBefore - (isConsumed ? 1 : 0);
+                log.info("   - Expected remaining after: {}", expectedRemaining);
+
+                if (remainingTokens != expectedRemaining) {
+                    log.warn("⚠️ REMAINING TOKENS MISMATCH! Expected: {}, Actual: {}", expectedRemaining, remainingTokens);
+                }
+
+                if (isConsumed) {
+                    log.info("\n✅ REQUEST ALLOWED - Token consumed successfully");
+                    log.info("   - Before: {} tokens", availableTokensBefore);
+                    log.info("   - After: {} tokens", remainingTokens);
+                    log.info("   - Decrease: {} tokens", availableTokensBefore - remainingTokens);
+
+                    response.addHeader("X-Rate-Limit-Remaining", String.valueOf(remainingTokens));
+                    response.addHeader("X-Rate-Limit-Bucket", bucketKey);
+                    response.addHeader("X-Request-Sequence", String.valueOf(requestNumber));
+
+                    long processingTime = System.currentTimeMillis() - requestStartTime;
+                    log.info("   - Request processing time: {} ms", processingTime);
+
+                    // Release lock before calling filter chain
+                    log.info("🔓 Releasing lock for bucket key: {}", bucketKey);
+
+                    filterChain.doFilter(request, response);
+
+                    log.info("✅ REQUEST COMPLETED SUCCESSFULLY: {} {} (Total time: {} ms)",
+                            method, requestURI, System.currentTimeMillis() - requestStartTime);
+                } else {
+                    log.warn("\n🚫 REQUEST BLOCKED - Rate limit exceeded!");
+                    log.warn("   - Bucket exhausted for key: {}", bucketKey);
+                    log.warn("   - Available before: {} tokens", availableTokensBefore);
+                    log.warn("   - Need to wait {} seconds before next request", secondsToWait);
+                    log.warn("   - Request #{} was blocked (would have been request #{} for this bucket)",
+                            requestNumber, (config != null ? config.getBandwidths()[0].getCapacity() - availableTokensBefore + 1 : "?"));
+
+                    // Release lock before sending response
+                    log.info("🔓 Releasing lock for bucket key: {}", bucketKey);
+                    rejectRequest(request, response, probe);
+                }
+
+            } catch (Exception e) {
+                log.error("\n❌ RATE LIMITING ERROR - Exception occurred", e);
+                log.error("   - Bucket Key: {}", bucketKey);
+                log.error("   - Error Type: {}", e.getClass().getSimpleName());
+                log.error("   - Error Message: {}", e.getMessage());
+                log.error("   - Stack trace: ", e);
+
+                // Release lock before sending error response
+                log.info("🔓 Releasing lock for bucket key: {}", bucketKey);
+
+                // Fail-closed: Return 429 when Redis fails
+                log.warn("⚠️ FALLING BACK TO FAIL-CLOSED - Returning 429");
+                response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+                response.setContentType("application/json");
+                response.addHeader("X-Rate-Limit-Error", "service-unavailable");
+                ErrorResponseDTO errorResponse = new ErrorResponseDTO(
+                        "error",
+                        "Rate limiting service unavailable - Please try again later"
+                );
+                objectMapper.writeValue(response.getWriter(), errorResponse);
+                log.info("❌ REQUEST BLOCKED due to rate limiting service error: {} {}", method, requestURI);
             }
-
-        } catch (Exception e) {
-            log.error("\n❌ RATE LIMITING ERROR - Exception occurred", e);
-            log.error("   - Bucket Key: {}", bucketKey);
-            log.error("   - Error Type: {}", e.getClass().getSimpleName());
-            log.error("   - Error Message: {}", e.getMessage());
-            log.error("   - Stack trace: ", e);
-
-            // Fail-closed: Return 429 when Redis fails
-            log.warn("⚠️ FALLING BACK TO FAIL-CLOSED - Returning 429");
-            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-            response.setContentType("application/json");
-            response.addHeader("X-Rate-Limit-Error", "service-unavailable");
-            ErrorResponseDTO errorResponse = new ErrorResponseDTO(
-                    "error",
-                    "Rate limiting service unavailable - Please try again later"
-            );
-            objectMapper.writeValue(response.getWriter(), errorResponse);
-            log.info("❌ REQUEST BLOCKED due to rate limiting service error: {} {}", method, requestURI);
         }
 
         log.info("\n" + "=".repeat(80) + "\n");
@@ -257,6 +278,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         log.info("API bucket configuration: {}", apiBucketConfiguration != null ? "LOADED" : "NULL");
         log.info("ProxyManager: {}", proxyManager != null ? "LOADED" : "NULL");
         log.info("ObjectMapper: {}", objectMapper != null ? "LOADED" : "NULL");
+        log.info("Lock mechanism: ENABLED (ConcurrentHashMap per bucket key)");
         log.info("=".repeat(80) + "\n");
         super.initFilterBean();
     }
