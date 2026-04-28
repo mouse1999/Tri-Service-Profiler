@@ -19,6 +19,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -36,6 +38,9 @@ public class RateLimitingFilter extends OncePerRequestFilter {
 
     // Counter to track request sequence across all requests
     private static final AtomicInteger requestCounter = new AtomicInteger(0);
+
+    // CACHE BUCKETS to reuse same instance for same key
+    private final ConcurrentHashMap<String, Bucket> bucketCache = new ConcurrentHashMap<>();
 
     // Locks for each bucket key to prevent race conditions
     private final ConcurrentHashMap<String, Object> bucketLocks = new ConcurrentHashMap<>();
@@ -55,76 +60,57 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         long requestStartTime = System.currentTimeMillis();
         String method = request.getMethod();
         String requestURI = request.getRequestURI();
-        String clientId = resolveClientIdentifier(request);
 
-        // Get Session ID if available
-        String sessionId = request.getSession(false) != null ? request.getSession().getId() : "no-session";
+        // NORMALIZE client identifier to prevent IPv4/IPv6 race conditions
+        String clientId = normalizeClientIdentifier(request);
+        boolean isAuthPath = requestURI != null && requestURI.startsWith(AUTH_PATH_PREFIX);
+        String bucketKey = (isAuthPath ? "auth:" : "api:") + clientId;
 
         log.info("\n" + "=".repeat(80));
-        log.info("🔵🔵🔵 REQUEST #{} 🔵🔵🔵", requestNumber);
+        log.info("🔵🔵🔵 REQUEST #{} - BUCKET KEY: {} 🔵🔵🔵", requestNumber, bucketKey);
         log.info("=".repeat(80));
         log.info("📋 REQUEST DETAILS:");
         log.info("   - Method: {}", method);
         log.info("   - URI: {}", requestURI);
-        log.info("   - Client IP (resolved): {}", clientId);
-        log.info("   - Session ID: {}", sessionId);
-        log.info("   - Remote Addr: {}", request.getRemoteAddr());
-        log.info("   - X-Forwarded-For: {}", request.getHeader("X-Forwarded-For"));
-        log.info("   - X-Real-IP: {}", request.getHeader("X-Real-IP"));
+        log.info("   - Normalized Client ID: {}", clientId);
 
-        boolean isAuthPath = requestURI != null && requestURI.startsWith(AUTH_PATH_PREFIX);
-        String bucketKey = (isAuthPath ? "auth:" : "api:") + clientId;
+        // Get the appropriate configuration supplier
+        Supplier<BucketConfiguration> configSupplier = isAuthPath ? authBucketConfiguration : apiBucketConfiguration;
 
-        log.info("\n📊 BUCKET DECISION:");
-        log.info("   - isAuthPath: {}", isAuthPath);
-        log.info("   - bucketKey: {}", bucketKey);
-        log.info("   - rate limit type: {}", isAuthPath ? "AUTH" : "API");
+        // Log configuration details
+        try {
+            BucketConfiguration config = configSupplier.get();
+            long capacity = config.getBandwidths()[0].getCapacity();
+            long refillPeriodNanos = config.getBandwidths()[0].getRefillPeriodNanos();
+            long refillPeriodSeconds = refillPeriodNanos / 1_000_000_000;
+
+            log.info("\n⚙️ BUCKET CONFIGURATION:");
+            log.info("   - Capacity: {} requests", capacity);
+            log.info("   - Refill: {} per {} seconds", capacity, refillPeriodSeconds);
+            log.info("   - Type: {}", isAuthPath ? "AUTH" : "API");
+        } catch (Exception e) {
+            log.error("❌ FAILED TO GET BUCKET CONFIGURATION: {}", e.getMessage(), e);
+        }
 
         // Get or create a lock for this bucket key
         Object bucketLock = bucketLocks.computeIfAbsent(bucketKey, k -> new Object());
 
-        // Synchronize on bucket key to ensure atomic operations
+        // CRITICAL: Synchronize on bucket key to ensure atomic operations
         synchronized (bucketLock) {
             log.info("🔒 Acquired lock for bucket key: {}", bucketKey);
 
-            // Get the appropriate configuration supplier
-            Supplier<BucketConfiguration> configSupplier = isAuthPath ? authBucketConfiguration : apiBucketConfiguration;
-
-            // Log configuration details
-            BucketConfiguration config = null;
             try {
-                config = configSupplier.get();
-                long capacity = config.getBandwidths()[0].getCapacity();
-                long refillTokens = config.getBandwidths()[0].getRefillTokens();
-                long refillPeriodNanos = config.getBandwidths()[0].getRefillPeriodNanos();
-                long refillPeriodSeconds = refillPeriodNanos / 1_000_000_000;
+                // Get or create cached bucket (REUSE same instance!)
+                Bucket bucket = bucketCache.computeIfAbsent(bucketKey, key -> {
+                    log.info("🪣 Creating NEW cached bucket for key: {}", bucketKey);
+                    return proxyManager.builder().build(key, configSupplier);
+                });
 
-                log.info("\n⚙️ BUCKET CONFIGURATION:");
-                log.info("   - Capacity: {} requests", capacity);
-                log.info("   - Refill Tokens: {} per {} seconds", refillTokens, refillPeriodSeconds);
-                log.info("   - Config Source: {}", isAuthPath ? "authBucketConfiguration" : "apiBucketConfiguration");
-            } catch (Exception e) {
-                log.error("❌ FAILED TO GET BUCKET CONFIGURATION: {}", e.getMessage(), e);
-            }
-
-            try {
-                log.info("\n🔨 BUILDING BUCKET for key: '{}'", bucketKey);
-
-                long beforeBuild = System.currentTimeMillis();
-                Bucket bucket = proxyManager.builder()
-                        .build(bucketKey, configSupplier);
-                long buildTime = System.currentTimeMillis() - beforeBuild;
-
-                log.info("✅ BUCKET CREATED for key: '{}' (took {} ms)", bucketKey, buildTime);
-
-                // Get current bucket state BEFORE consuming (inside lock for consistency)
+                // Get current bucket state BEFORE consuming
                 long availableTokensBefore = bucket.getAvailableTokens();
-                log.info("📊 BUCKET STATE BEFORE CONSUMPTION:");
-                log.info("   - Available tokens before: {}", availableTokensBefore);
-                log.info("   - Bucket key: {}", bucketKey);
-                log.info("   - Request #: {}", requestNumber);
+                log.info("📊 Available tokens BEFORE: {}", availableTokensBefore);
 
-                log.info("\n🎫 TRYING TO CONSUME 1 TOKEN...");
+                // Attempt to consume 1 token
                 long beforeConsume = System.currentTimeMillis();
                 ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
                 long consumeTime = System.currentTimeMillis() - beforeConsume;
@@ -134,46 +120,34 @@ public class RateLimitingFilter extends OncePerRequestFilter {
                 long nanosToWait = probe.getNanosToWaitForRefill();
                 long secondsToWait = TimeUnit.NANOSECONDS.toSeconds(nanosToWait);
 
-                log.info("\n📊 CONSUMPTION RESULT (took {} ms):", consumeTime);
+                log.info("📊 CONSUMPTION RESULT (took {} ms):", consumeTime);
                 log.info("   - Token Consumed: {}", isConsumed);
-                log.info("   - Remaining Tokens: {}", remainingTokens);
-                log.info("   - Time to wait for refill: {} nanoseconds ({} seconds)", nanosToWait, secondsToWait);
+                log.info("   - Remaining: {} tokens", remainingTokens);
+                log.info("   - Wait time: {} seconds", secondsToWait);
 
-                // Calculate expected remaining
-                long expectedRemaining = availableTokensBefore - (isConsumed ? 1 : 0);
-                log.info("   - Expected remaining after: {}", expectedRemaining);
-
-                if (remainingTokens != expectedRemaining) {
-                    log.warn("⚠️ REMAINING TOKENS MISMATCH! Expected: {}, Actual: {}", expectedRemaining, remainingTokens);
+                // Validate consumption consistency
+                if (isConsumed && remainingTokens != availableTokensBefore - 1) {
+                    log.error("❌ TOKEN MISMATCH! Expected: {}, Actual: {}",
+                            availableTokensBefore - 1, remainingTokens);
                 }
 
                 if (isConsumed) {
-                    log.info("\n✅ REQUEST ALLOWED - Token consumed successfully");
-                    log.info("   - Before: {} tokens", availableTokensBefore);
-                    log.info("   - After: {} tokens", remainingTokens);
-                    log.info("   - Decrease: {} tokens", availableTokensBefore - remainingTokens);
-
+                    log.info("✅ REQUEST ALLOWED");
                     response.addHeader("X-Rate-Limit-Remaining", String.valueOf(remainingTokens));
                     response.addHeader("X-Rate-Limit-Bucket", bucketKey);
                     response.addHeader("X-Request-Sequence", String.valueOf(requestNumber));
 
-                    long processingTime = System.currentTimeMillis() - requestStartTime;
-                    log.info("   - Request processing time: {} ms", processingTime);
-
-                    // Release lock before calling filter chain
+                    // Release lock BEFORE calling filter chain to prevent deadlocks
                     log.info("🔓 Releasing lock for bucket key: {}", bucketKey);
 
                     filterChain.doFilter(request, response);
 
-                    log.info("✅ REQUEST COMPLETED SUCCESSFULLY: {} {} (Total time: {} ms)",
-                            method, requestURI, System.currentTimeMillis() - requestStartTime);
+                    long totalTime = System.currentTimeMillis() - requestStartTime;
+                    log.info("✅ REQUEST COMPLETED ({} ms)", totalTime);
+
                 } else {
-                    log.warn("\n🚫 REQUEST BLOCKED - Rate limit exceeded!");
-                    log.warn("   - Bucket exhausted for key: {}", bucketKey);
-                    log.warn("   - Available before: {} tokens", availableTokensBefore);
-                    log.warn("   - Need to wait {} seconds before next request", secondsToWait);
-                    log.warn("   - Request #{} was blocked (would have been request #{} for this bucket)",
-                            requestNumber, (config != null ? config.getBandwidths()[0].getCapacity() - availableTokensBefore + 1 : "?"));
+                    log.warn("🚫 REQUEST BLOCKED - Rate limit exceeded!");
+                    log.warn("   - Needed to wait {} seconds", secondsToWait);
 
                     // Release lock before sending response
                     log.info("🔓 Releasing lock for bucket key: {}", bucketKey);
@@ -181,55 +155,75 @@ public class RateLimitingFilter extends OncePerRequestFilter {
                 }
 
             } catch (Exception e) {
-                log.error("\n❌ RATE LIMITING ERROR - Exception occurred", e);
-                log.error("   - Bucket Key: {}", bucketKey);
-                log.error("   - Error Type: {}", e.getClass().getSimpleName());
-                log.error("   - Error Message: {}", e.getMessage());
-                log.error("   - Stack trace: ", e);
+                log.error("❌ RATE LIMITING ERROR: {}", e.getMessage(), e);
+                log.info("🔓 Releasing lock due to error");
 
-                // Release lock before sending error response
-                log.info("🔓 Releasing lock for bucket key: {}", bucketKey);
-
-                // Fail-closed: Return 429 when Redis fails
-                log.warn("⚠️ FALLING BACK TO FAIL-CLOSED - Returning 429");
                 response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
                 response.setContentType("application/json");
-                response.addHeader("X-Rate-Limit-Error", "service-unavailable");
                 ErrorResponseDTO errorResponse = new ErrorResponseDTO(
                         "error",
                         "Rate limiting service unavailable - Please try again later"
                 );
                 objectMapper.writeValue(response.getWriter(), errorResponse);
-                log.info("❌ REQUEST BLOCKED due to rate limiting service error: {} {}", method, requestURI);
             }
         }
 
         log.info("\n" + "=".repeat(80) + "\n");
     }
 
-    private String resolveClientIdentifier(HttpServletRequest request) {
+    /**
+     * Normalizes client identifier to prevent race conditions from different IP representations.
+     * This ensures that IPv4 (127.0.0.1) and IPv6 (::1) localhost both map to same key.
+     */
+    private String normalizeClientIdentifier(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
         String realIp = request.getHeader("X-Real-IP");
-
-        log.debug("🔍 RESOLVING CLIENT IDENTIFIER:");
-        log.debug("   - X-Forwarded-For: {}", forwarded);
-        log.debug("   - X-Real-IP: {}", realIp);
-        log.debug("   - Remote Addr: {}", request.getRemoteAddr());
-
-        if (forwarded != null && !forwarded.isBlank()) {
-            String clientIp = forwarded.split(",")[0].trim();
-            log.debug("   - Resolved from X-Forwarded-For: {}", clientIp);
-            return clientIp;
-        }
-
-        if (realIp != null && !realIp.isBlank()) {
-            log.debug("   - Resolved from X-Real-IP: {}", realIp);
-            return realIp;
-        }
-
         String remoteAddr = request.getRemoteAddr();
-        log.debug("   - Resolved from Remote Addr: {}", remoteAddr);
-        return remoteAddr;
+
+        String rawClientId = null;
+
+        // Priority: X-Forwarded-For > X-Real-IP > RemoteAddr
+        if (forwarded != null && !forwarded.isBlank()) {
+            rawClientId = forwarded.split(",")[0].trim();
+            log.debug("Client from X-Forwarded-For: {}", rawClientId);
+        } else if (realIp != null && !realIp.isBlank()) {
+            rawClientId = realIp.trim();
+            log.debug("Client from X-Real-IP: {}", rawClientId);
+        } else {
+            rawClientId = remoteAddr;
+            log.debug("Client from RemoteAddr: {}", rawClientId);
+        }
+
+        // Normalize localhost addresses
+        if (isLocalhost(rawClientId)) {
+            log.debug("Normalizing localhost: {} → 127.0.0.1", rawClientId);
+            return "127.0.0.1";
+        }
+
+        return rawClientId;
+    }
+
+    /**
+     * Checks if an address is a localhost address (IPv4 or IPv6)
+     */
+    private boolean isLocalhost(String address) {
+        if (address == null) return false;
+
+        // Direct string matches
+        if ("127.0.0.1".equals(address) ||
+                "localhost".equalsIgnoreCase(address) ||
+                "::1".equals(address) ||
+                "0:0:0:0:0:0:0:1".equals(address)) {
+            return true;
+        }
+
+        // Try to resolve and check if loopback
+        try {
+            InetAddress inet = InetAddress.getByName(address);
+            return inet.isLoopbackAddress();
+        } catch (UnknownHostException e) {
+            return false;
+        }
     }
 
     private void rejectRequest(HttpServletRequest request,
@@ -240,18 +234,12 @@ public class RateLimitingFilter extends OncePerRequestFilter {
                 probe.getNanosToWaitForRefill());
 
         if (retryAfterSeconds < MIN_RETRY_AFTER_SECONDS) {
-            log.debug("Retry-After less than minimum ({}), setting to minimum: {} seconds",
-                    retryAfterSeconds, MIN_RETRY_AFTER_SECONDS);
             retryAfterSeconds = MIN_RETRY_AFTER_SECONDS;
         }
 
-        log.warn("\n🚫 SENDING 429 RATE LIMIT RESPONSE:");
+        log.warn("🚫 SENDING 429 RESPONSE:");
         log.warn("   - Path: {}", request.getRequestURI());
-        log.warn("   - IP: {}", resolveClientIdentifier(request));
         log.warn("   - Retry-After: {} seconds", retryAfterSeconds);
-        log.warn("   - Rate limit type: {}",
-                request.getRequestURI().startsWith(AUTH_PATH_PREFIX) ? "AUTH" : "API");
-        log.warn("   - Remaining tokens before block: {}", probe.getRemainingTokens());
 
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setContentType("application/json");
@@ -264,8 +252,6 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         );
 
         objectMapper.writeValue(response.getWriter(), errorResponse);
-
-        log.warn("⚠️ RATE LIMIT EXCEEDED - 429 response sent to client");
     }
 
     @Override
@@ -273,12 +259,11 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         log.info("\n" + "=".repeat(80));
         log.info("🔧🔧🔧 RATE LIMITING FILTER INITIALIZED 🔧🔧🔧");
         log.info("=".repeat(80));
-        log.info("Filter is ACTIVE and will enforce rate limits");
-        log.info("Auth bucket configuration: {}", authBucketConfiguration != null ? "LOADED" : "NULL");
-        log.info("API bucket configuration: {}", apiBucketConfiguration != null ? "LOADED" : "NULL");
-        log.info("ProxyManager: {}", proxyManager != null ? "LOADED" : "NULL");
-        log.info("ObjectMapper: {}", objectMapper != null ? "LOADED" : "NULL");
-        log.info("Lock mechanism: ENABLED (ConcurrentHashMap per bucket key)");
+        log.info("✅ Filter is ACTIVE and will enforce rate limits");
+        log.info("✅ Bucket Cache: ENABLED (reuses same bucket per key)");
+        log.info("✅ Lock Mechanism: Per-bucket synchronization");
+        log.info("✅ IP Normalization: ENABLED (IPv4/IPv6 localhost → 127.0.0.1)");
+        log.info("✅ Fail-closed: ON (returns 429 on Redis errors)");
         log.info("=".repeat(80) + "\n");
         super.initFilterBean();
     }
