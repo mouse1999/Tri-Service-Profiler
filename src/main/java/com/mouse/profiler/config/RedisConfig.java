@@ -30,8 +30,8 @@ public class RedisConfig {
     @Value("${spring.data.redis.database:0}")
     private int redisDatabase;
 
-    @Value("${spring.data.redis.timeout:2000}")
-    private long timeoutMillis;
+    @Value("${spring.data.redis.timeout:2s}")
+    private Duration timeout;
 
 
     /**
@@ -48,14 +48,13 @@ public class RedisConfig {
                 .withHost(redisHost)
                 .withPort(redisPort)
                 .withDatabase(redisDatabase)
-                .withTimeout(Duration.ofMillis(timeoutMillis));
+                .withTimeout(timeout);
 
         if (redisPassword != null && !redisPassword.trim().isEmpty()) {
             uriBuilder.withPassword(redisPassword.toCharArray());
         }
 
         RedisURI redisUri = uriBuilder.build();
-
         return RedisClient.create(redisUri);
     }
 }
