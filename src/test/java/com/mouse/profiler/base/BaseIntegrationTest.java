@@ -45,11 +45,9 @@ public abstract class BaseIntegrationTest {
     @AfterEach
     void flushRedis() {
         try (var connection = redisClient.connect()) {
-            RedisCommands<String, String> commands = connection.sync();
-            commands.flushall();
+            connection.sync().flushall();
         } catch (Exception e) {
-            System.err.println("Warning: Failed to flush Redis - " + e.getMessage());
-            // Don't fail the test just because cleanup failed
+            System.err.println("Redis flush failed (this is ok in some tests): " + e.getMessage());
         }
     }
 }

@@ -5,7 +5,10 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.*;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,8 +32,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * all Bucket4j state from Redis after every test method, ensuring each test
  * starts with full buckets. No {@code @DirtiesContext} needed.</p>
  */
-@DisplayName("Rate Limiting Filter — Integration Tests")
-class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
+@TestPropertySource(properties = "rate.limiting.enabled=true")
+public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
 
     private static final String API_PROFILES_ENDPOINT  = "/api/v1/profiles";
     private static final String AUTH_LOGIN_ENDPOINT    = "/auth/login";
