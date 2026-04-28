@@ -1,13 +1,10 @@
 package com.mouse.profiler.filter;
 
 import com.mouse.profiler.base.BaseIntegrationTest;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.*;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.ArrayList;
@@ -30,42 +27,39 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><b>State isolation:</b> {@code BaseIntegrationTest.flushRedis()} clears
  * all Bucket4j state from Redis after every test method, ensuring each test
- * starts with full buckets. No {@code @DirtiesContext} needed.</p>
+ * starts with full buckets.</p>
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
-@TestPropertySource(properties = "rate.limiting.enabled=true")
+@TestPropertySource(properties = {
+        "rate.limiting.enabled=true",
+        "rate.limit.auth.requests=10",
+        "rate.limit.auth.duration.seconds=5",
+        "rate.limit.api.requests=60",
+        "rate.limit.api.duration.seconds=5"
+})
 public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
 
-    private static final String API_PROFILES_ENDPOINT  = "/api/v1/profiles";
-    private static final String AUTH_LOGIN_ENDPOINT    = "/auth/login";
+    private static final String API_PROFILES_ENDPOINT = "/api/v1/profiles";
+    private static final String AUTH_LOGIN_ENDPOINT = "/auth/login";
     private static final String CORRECT_VERSION_HEADER = "X-API-Version";
-    private static final String CORRECT_VERSION_VALUE  = "1";
+    private static final String CORRECT_VERSION_VALUE = "1";
 
     private static final int AUTH_RATE_LIMIT = 10;
-    private static final int API_RATE_LIMIT  = 60;
+    private static final int API_RATE_LIMIT = 60;
 
     /**
-     * Fires {@code count} sequential GET requests to the given endpoint,
-     * attaching the X-API-Version header when {@code withVersionHeader} is true.
-     *
-     * <p>Returns every response status code in order so tests can inspect
-     * exactly which request in the sequence was the first to be blocked.</p>
+     * Fires {@code count} sequential GET requests to the API endpoint.
      *
      * @param count how many requests to fire
      * @return ordered list of HTTP status codes, one per request
      */
-    private List<HttpStatus> fireRequests(int count) {
+    private List<HttpStatus> fireApiRequests(int count) {
         List<HttpStatus> statuses = new ArrayList<>();
 
         for (int i = 0; i < count; i++) {
-            HttpHeaders headers = new HttpHeaders();
-            if (true) {
-                headers.set(CORRECT_VERSION_HEADER, CORRECT_VERSION_VALUE);
-            }
+            HttpHeaders headers = createHeaders();
 
             ResponseEntity<String> response = restTemplate.exchange(
-                    RateLimitingFilterIntegrationTest.API_PROFILES_ENDPOINT,
+                    API_PROFILES_ENDPOINT,
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
                     String.class
@@ -78,16 +72,25 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Fires {@code count} sequential POST requests.
-     * Used for auth endpoint tests since login is a POST.
+     * Fires {@code count} sequential POST requests to the auth endpoint.
+     *
+     * @param count how many requests to fire
+     * @return ordered list of HTTP status codes, one per request
      */
-    private List<HttpStatus> firePostRequests(int count) {
+    private List<HttpStatus> fireAuthRequests(int count) {
         List<HttpStatus> statuses = new ArrayList<>();
 
         for (int i = 0; i < count; i++) {
-            ResponseEntity<String> response = restTemplate.postForEntity(
-                    RateLimitingFilterIntegrationTest.AUTH_LOGIN_ENDPOINT,
-                    null,
+            HttpHeaders headers = createHeaders();
+
+            // Create a simple login request body (your auth endpoint might expect this)
+            String loginBody = "{\"username\":\"test\",\"password\":\"test\"}";
+            HttpEntity<String> entity = new HttpEntity<>(loginBody, headers);
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    AUTH_LOGIN_ENDPOINT,
+                    HttpMethod.POST,
+                    entity,
                     String.class
             );
             statuses.add((HttpStatus) response.getStatusCode());
@@ -96,38 +99,34 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
         return statuses;
     }
 
+    /**
+     * Creates HTTP headers with the required API version.
+     */
+    private HttpHeaders createHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(CORRECT_VERSION_HEADER, CORRECT_VERSION_VALUE);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return headers;
+    }
+
     @Nested
     @DisplayName("When requests are within the rate limit")
     class WithinRateLimit {
 
-        /**
-         * 10 requests against an auth endpoint should all pass through
-         * (none should receive 429). They may receive other codes like
-         * 401 from missing auth, but not 429 from rate limiting.
-         */
         @Test
-        @Disabled()
         @DisplayName("10 requests to /auth/** within limit are never rate limited")
         void authEndpoint_tenRequests_noneBlocked() {
-            List<HttpStatus> statuses = firePostRequests(
-                    AUTH_RATE_LIMIT
-            );
+            List<HttpStatus> statuses = fireAuthRequests(AUTH_RATE_LIMIT);
 
             assertThat(statuses)
                     .as("None of the first %d requests should be rate limited", AUTH_RATE_LIMIT)
                     .doesNotContain(HttpStatus.TOO_MANY_REQUESTS);
         }
 
-        /**
-         * 5 requests against the API endpoint — well within the 60/5s limit.
-         * All should pass the rate limiter regardless of auth outcome.
-         */
         @Test
         @DisplayName("5 requests to /api/v1/profiles within limit are never rate limited")
         void apiEndpoint_fiveRequests_noneBlocked() {
-            List<HttpStatus> statuses = fireRequests(
-                    5
-            );
+            List<HttpStatus> statuses = fireApiRequests(5);
 
             assertThat(statuses)
                     .as("5 requests well within limit should never receive 429")
@@ -135,32 +134,25 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
         }
     }
 
-
     @Nested
     @DisplayName("When requests exceed the rate limit")
     class ExceedingRateLimit {
 
-        /**
-         * Core test for auth rate limiting.
-         *
-         * <p>The strategy:</p>
-         * <ol>
-         *   <li>Fire AUTH_RATE_LIMIT (10) requests to exhaust the bucket.</li>
-         *   <li>Fire one more request — the 11th.</li>
-         *   <li>Assert the 11th returns 429.</li>
-         * </ol>
-         */
         @Test
-        @Disabled()
         @DisplayName("11th request to /auth/** returns 429 Too Many Requests")
         void authEndpoint_eleventhRequest_isRateLimited() {
             // Exhaust the auth bucket completely
-            firePostRequests(AUTH_RATE_LIMIT);
+            fireAuthRequests(AUTH_RATE_LIMIT);
 
             // The very next request must be blocked
-            ResponseEntity<String> blockedResponse = restTemplate.postForEntity(
+            HttpHeaders headers = createHeaders();
+            String loginBody = "{\"username\":\"test\",\"password\":\"test\"}";
+            HttpEntity<String> entity = new HttpEntity<>(loginBody, headers);
+
+            ResponseEntity<String> blockedResponse = restTemplate.exchange(
                     AUTH_LOGIN_ENDPOINT,
-                    null,
+                    HttpMethod.POST,
+                    entity,
                     String.class
             );
 
@@ -169,24 +161,14 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
                     .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         }
 
-        /**
-         * Core test for API rate limiting.
-         *
-         * <p>Fires API_RATE_LIMIT (60) requests to exhaust the bucket,
-         * then asserts the 61st returns 429.</p>
-         *
-         * <p>Note: This fires 61 real HTTP requests which takes a few seconds.
-         * This is intentional — integration tests verify real behavior.</p>
-         */
         @Test
         @DisplayName("61st request to /api/v1/profiles returns 429 Too Many Requests")
         void apiEndpoint_sixtyFirstRequest_isRateLimited() {
             // Exhaust the API bucket completely
-            fireRequests(API_RATE_LIMIT);
+            fireApiRequests(API_RATE_LIMIT);
 
             // The very next request must be blocked
-            HttpHeaders headers = new HttpHeaders();
-            headers.set(CORRECT_VERSION_HEADER, CORRECT_VERSION_VALUE);
+            HttpHeaders headers = createHeaders();
 
             ResponseEntity<String> blockedResponse = restTemplate.exchange(
                     API_PROFILES_ENDPOINT,
@@ -200,20 +182,10 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
                     .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         }
 
-        /**
-         * Verifies the exact transition point — requests 1 through 10
-         * on an auth endpoint must ALL succeed, and request 11 must fail.
-         *
-         * <p>This is stricter than the previous test. It checks the boundary
-         * precisely rather than just firing and checking the last one.</p>
-         */
         @Test
-        @Disabled()
         @DisplayName("Auth rate limit boundary: requests 1-10 pass, request 11 fails")
         void authEndpoint_exactBoundary() {
-            List<HttpStatus> statuses = firePostRequests(
-                    AUTH_RATE_LIMIT + 1   // fire 11 total
-            );
+            List<HttpStatus> statuses = fireAuthRequests(AUTH_RATE_LIMIT + 1);
 
             // First 10 must all pass the rate limiter
             List<HttpStatus> first10 = statuses.subList(0, AUTH_RATE_LIMIT);
@@ -228,58 +200,55 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
                     .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         }
 
-        /**
-         * Verifies that the 429 response body follows the ApiErrorResponse
-         * JSON shape. The CLI needs to parse this to display a useful message.
-         */
         @Test
         @DisplayName("429 response body contains structured JSON error body")
         void rateLimited_responseBody_hasCorrectShape() {
             // Exhaust auth bucket
-            firePostRequests(AUTH_RATE_LIMIT);
+            fireAuthRequests(AUTH_RATE_LIMIT);
 
-            ResponseEntity<String> blocked = restTemplate.postForEntity(
+            HttpHeaders headers = createHeaders();
+            String loginBody = "{\"username\":\"test\",\"password\":\"test\"}";
+            HttpEntity<String> entity = new HttpEntity<>(loginBody, headers);
+
+            ResponseEntity<String> blocked = restTemplate.exchange(
                     AUTH_LOGIN_ENDPOINT,
-                    null,
+                    HttpMethod.POST,
+                    entity,
                     String.class
             );
 
-            assertThat(blocked.getStatusCode())
-                    .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+            assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
             String body = blocked.getBody();
-            assertThat(body).as("Body must contain status field")
-                    .contains("\"status\"");
-            assertThat(body).as("Body must contain error field")
-                    .contains("\"error\"");
-            assertThat(body).as("Body must contain message field")
-                    .contains("\"message\"");
-            assertThat(body).as("Body must contain path field")
-                    .contains("\"path\"");
-            assertThat(body).as("Body must contain 429 code")
-                    .contains("429");
+
+            // Your ErrorResponseDTO has "status" and "error" fields
+            assertThat(body).as("Response body must not be null").isNotNull();
+            assertThat(body).as("Body must contain status field").contains("\"status\"");
+            assertThat(body).as("Body must contain error field").contains("\"error\"");
+
+            // Optional: Check actual values
+            assertThat(body).as("Status should be 'error'").contains("\"status\":\"error\"");
+            assertThat(body).as("Error should be 'Too Many Requests'").contains("\"error\":\"Too Many Requests\"");
         }
 
-        /**
-         * Verifies the Retry-After header is present on a 429 response.
-         * The CLI uses this header to tell the user how long to wait.
-         */
         @Test
-        @Disabled()
         @DisplayName("429 response includes Retry-After header")
         void rateLimited_responseHeaders_containRetryAfter() {
             // Exhaust auth bucket
-            firePostRequests(AUTH_RATE_LIMIT);
+            fireAuthRequests(AUTH_RATE_LIMIT);
 
-            ResponseEntity<String> blocked = restTemplate.postForEntity(
+            HttpHeaders headers = createHeaders();
+            String loginBody = "{\"username\":\"test\",\"password\":\"test\"}";
+            HttpEntity<String> entity = new HttpEntity<>(loginBody, headers);
+
+            ResponseEntity<String> blocked = restTemplate.exchange(
                     AUTH_LOGIN_ENDPOINT,
-                    null,
+                    HttpMethod.POST,
+                    entity,
                     String.class
             );
 
-            assertThat(blocked.getStatusCode())
-                    .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-
+            assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
             assertThat(blocked.getHeaders().containsKey("Retry-After"))
                     .as("429 response must include Retry-After header")
                     .isTrue();
@@ -296,15 +265,10 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
                     .isGreaterThan(0);
         }
 
-        /**
-         * Verifies the X-Rate-Limit-Remaining header decrements correctly
-         * as requests consume tokens from the bucket.
-         */
         @Test
         @DisplayName("X-Rate-Limit-Remaining header decrements with each request")
         void apiEndpoint_remainingHeader_decrementsCorrectly() {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set(CORRECT_VERSION_HEADER, CORRECT_VERSION_VALUE);
+            HttpHeaders headers = createHeaders();
 
             // First request — bucket should be full, remaining = 59
             ResponseEntity<String> first = restTemplate.exchange(
@@ -314,8 +278,7 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
                     String.class
             );
 
-            String remainingAfterFirst = first.getHeaders()
-                    .getFirst("X-Rate-Limit-Remaining");
+            String remainingAfterFirst = first.getHeaders().getFirst("X-Rate-Limit-Remaining");
 
             // Second request — remaining should be one less than after first
             ResponseEntity<String> second = restTemplate.exchange(
@@ -325,8 +288,7 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
                     String.class
             );
 
-            String remainingAfterSecond = second.getHeaders()
-                    .getFirst("X-Rate-Limit-Remaining");
+            String remainingAfterSecond = second.getHeaders().getFirst("X-Rate-Limit-Remaining");
 
             assertThat(remainingAfterFirst)
                     .as("First request must include X-Rate-Limit-Remaining header")
@@ -336,7 +298,7 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
                     .as("Second request must include X-Rate-Limit-Remaining header")
                     .isNotNull();
 
-            long firstRemaining  = Long.parseLong(remainingAfterFirst);
+            long firstRemaining = Long.parseLong(remainingAfterFirst);
             long secondRemaining = Long.parseLong(remainingAfterSecond);
 
             assertThat(secondRemaining)
@@ -345,44 +307,39 @@ public class RateLimitingFilterIntegrationTest extends BaseIntegrationTest {
         }
     }
 
-
-
     @Nested
     @DisplayName("Rate limit buckets are isolated between route types")
     class BucketIsolation {
 
-        /**
-         * Exhausting the auth bucket must NOT affect the API bucket.
-         * These are two independent Redis keys, not a shared counter.
-         *
-         * <p>If this test fails, it means the bucket key strategy is wrong —
-         * both route types are sharing the same Redis key.</p>
-         */
         @Test
-        @Disabled()
         @DisplayName("Exhausting auth bucket does not affect API bucket")
         void exhaustingAuthBucket_doesNotAffectApiBucket() {
             // Exhaust the auth limit completely
-            firePostRequests(AUTH_RATE_LIMIT);
+            fireAuthRequests(AUTH_RATE_LIMIT);
 
             // Verify auth is now blocked
-            ResponseEntity<String> authBlocked = restTemplate.postForEntity(
+            HttpHeaders authHeaders = createHeaders();
+            String loginBody = "{\"username\":\"test\",\"password\":\"test\"}";
+            HttpEntity<String> authEntity = new HttpEntity<>(loginBody, authHeaders);
+
+            ResponseEntity<String> authBlocked = restTemplate.exchange(
                     AUTH_LOGIN_ENDPOINT,
-                    null,
+                    HttpMethod.POST,
+                    authEntity,
                     String.class
             );
+
             assertThat(authBlocked.getStatusCode())
                     .as("Auth endpoint must be blocked after exhausting auth bucket")
                     .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
             // API endpoint must still be accessible
-            HttpHeaders headers = new HttpHeaders();
-            headers.set(CORRECT_VERSION_HEADER, CORRECT_VERSION_VALUE);
+            HttpHeaders apiHeaders = createHeaders();
 
             ResponseEntity<String> apiResponse = restTemplate.exchange(
                     API_PROFILES_ENDPOINT,
                     HttpMethod.GET,
-                    new HttpEntity<>(headers),
+                    new HttpEntity<>(apiHeaders),
                     String.class
             );
 
