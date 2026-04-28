@@ -66,7 +66,13 @@ public class RateLimitingFilter extends OncePerRequestFilter {
             }
         } catch (Exception e) {
             log.error("Rate limiting error for bucket key: {}, allowing request (fail-open)", bucketKey, e);
-            filterChain.doFilter(request, response);
+            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+            response.setContentType("application/json");
+            ErrorResponseDTO errorResponse = new ErrorResponseDTO(
+                    "error",
+                    "Rate limiting service unavailable"
+            );
+            objectMapper.writeValue(response.getWriter(), errorResponse);
         }
     }
 
@@ -96,7 +102,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
 
         ErrorResponseDTO errorResponse = new ErrorResponseDTO(
                 "error",
-                "Too Many Requests - Rate limit exceeded. Please try again in " + retryAfterSeconds + " seconds."
+                "Too Many Requests"
         );
 
         objectMapper.writeValue(response.getWriter(), errorResponse);

@@ -9,14 +9,6 @@ import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 
-/**
- * Configures the Redis connection using the Lettuce client.
- *
- * Lettuce is the async Redis client that Bucket4j uses to store
- * rate limit counters in Redis. Storing counters in Redis (rather than
- * in-memory) means rate limits survive server restarts and work correctly
- * if you ever run multiple instances of this backend.
- */
 @Configuration
 public class RedisConfig {
 
@@ -35,18 +27,6 @@ public class RedisConfig {
     @Value("${spring.data.redis.timeout:30s}")
     private Duration timeout;
 
-    /**
-     * Creates and exposes a Lettuce {@link RedisClient} as a Spring bean.
-     *
-     * This bean is injected into {@code Bucket4jConfig} where it is used
-     * to create the Redis-backed proxy that Bucket4j reads and writes
-     * rate limit counters through.
-     *
-     * <p>This bean is only created when rate limiting is enabled,
-     * preventing unnecessary Redis connections in development.</p>
-     *
-     * @return a configured Lettuce RedisClient ready to accept connections
-     */
     @Bean
     @ConditionalOnProperty(name = "rate.limiting.enabled", havingValue = "true", matchIfMissing = false)
     public RedisClient redisClient() {
