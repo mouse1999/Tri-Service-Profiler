@@ -23,5 +23,17 @@ jobs:
 
       - name: Run Unit + Integration Tests
         run: mvn clean verify -Dspring.profiles.active=test
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: false
+          DOCKER_HOST: unix:///var/run/docker.sock
+          TESTCONTAINERS_STARTUP_TIMEOUT: 120
 
-      
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            ~/.testcontainers/*
+            **/target/surefire-reports/*
+            **/target/failsafe-reports/*
