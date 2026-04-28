@@ -27,16 +27,46 @@ public abstract class BaseIntegrationTest {
             .withStartupTimeout(Duration.ofSeconds(90))
             .waitingFor(Wait.forLogMessage(".*Ready to accept connections.*", 1));
 
+    //Set system properties BEFORE Spring context loads
+    static {
+        // Force container to start and get the dynamic port
+        redis.start();
+
+        String host = redis.getHost();
+        int port = redis.getMappedPort(6379);
+
+        // Set system properties that Spring will read
+        System.setProperty("spring.data.redis.host", host);
+        System.setProperty("spring.data.redis.port", String.valueOf(port));
+        System.setProperty("spring.data.redis.timeout", "60s");
+        System.setProperty("rate.limiting.enabled", "true");
+
+        System.out.println("=========================================");
+        System.out.println("🔴 REDIS PORT MAPPING");
+        System.out.println("  Container port: 6379 → Host port: " + port);
+        System.out.println("  Connection: redis://" + host + ":" + port);
+        System.out.println("=========================================");
+
+        // Verify connection works
+        try {
+            RedisClient testClient = RedisClient.create("redis://" + host + ":" + port);
+            var conn = testClient.connect();
+            String pong = conn.sync().ping();
+            System.out.println("✅ Redis PING successful: " + pong);
+            conn.close();
+            testClient.shutdown();
+        } catch (Exception e) {
+            System.err.println("❌ Redis connection failed: " + e.getMessage());
+        }
+    }
 
     @DynamicPropertySource
     static void overrideRedisProperties(DynamicPropertyRegistry registry) {
-        // These will be set BEFORE Spring context loads
+        // Override again to be sure
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
-        registry.add("spring.data.redis.timeout", () -> "2s");
-        registry.add("rate.limiting.enabled", () -> "true");
         registry.add("spring.data.redis.timeout", () -> "60s");
-        registry.add("spring.data.redis.lettuce.shutdown-timeout", () -> "30s");
+        registry.add("rate.limiting.enabled", () -> "true");
         registry.add("rate.limit.auth.duration.seconds", () -> "5");
         registry.add("rate.limit.auth.duration.minutes", () -> "0");
         registry.add("rate.limit.api.duration.seconds", () -> "5");
@@ -54,8 +84,9 @@ public abstract class BaseIntegrationTest {
         if (redisClient != null) {
             try (var connection = redisClient.connect()) {
                 connection.sync().flushall();
+                System.out.println("✅ Redis flushed");
             } catch (Exception e) {
-                // Ignore flush errors in tests
+                System.err.println("❌ Redis flush failed: " + e.getMessage());
             }
         }
     }

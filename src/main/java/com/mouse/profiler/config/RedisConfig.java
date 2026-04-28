@@ -2,6 +2,7 @@ package com.mouse.profiler.config;
 
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -10,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import java.time.Duration;
 
 @Configuration
+@Slf4j
 public class RedisConfig {
 
     @Value("${spring.data.redis.host:localhost}")
@@ -30,6 +32,8 @@ public class RedisConfig {
     @Bean
     @ConditionalOnProperty(name = "rate.limiting.enabled", havingValue = "true", matchIfMissing = false)
     public RedisClient redisClient() {
+        log.info("Creating RedisClient with host={}, port={}, timeout={}", redisHost, redisPort, timeout);
+
         RedisURI.Builder uriBuilder = RedisURI.builder()
                 .withHost(redisHost)
                 .withPort(redisPort)
@@ -41,6 +45,8 @@ public class RedisConfig {
         }
 
         RedisURI redisUri = uriBuilder.build();
+        log.info("Redis URI: redis://{}:{}/{}", redisHost, redisPort, redisDatabase);
+
         return RedisClient.create(redisUri);
     }
 }
