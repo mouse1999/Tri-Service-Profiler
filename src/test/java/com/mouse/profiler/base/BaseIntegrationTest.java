@@ -9,6 +9,7 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -22,22 +23,20 @@ public abstract class BaseIntegrationTest {
 
     @Container
     static final RedisContainer redis = new RedisContainer(DockerImageName.parse("redis:7.2-alpine"))
+            .withExposedPorts(6379)
             .withStartupTimeout(Duration.ofSeconds(90))
-            .withExposedPorts(6379);
+            .waitingFor(Wait.forLogMessage(".*Ready to accept connections.*", 1));
 
-    static {
-        redis.start();
-    }
 
     @DynamicPropertySource
     static void overrideRedisProperties(DynamicPropertyRegistry registry) {
+        // These will be set BEFORE Spring context loads
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
-        // Disable rate limiting conditionally if Redis fails
-        registry.add("rate.limiting.enabled", () -> true);
+        registry.add("spring.data.redis.timeout", () -> "2s");
     }
 
-    @Autowired
+    @Autowired(required = false)
     protected TestRestTemplate restTemplate;
 
     @Autowired(required = false)
@@ -49,7 +48,7 @@ public abstract class BaseIntegrationTest {
             try (var connection = redisClient.connect()) {
                 connection.sync().flushall();
             } catch (Exception e) {
-                System.err.println("Redis flush failed (this is ok in some tests): " + e.getMessage());
+                // Ignore flush errors in tests
             }
         }
     }
