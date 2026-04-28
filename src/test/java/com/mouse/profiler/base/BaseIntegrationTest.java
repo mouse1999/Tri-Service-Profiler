@@ -34,6 +34,7 @@ public abstract class BaseIntegrationTest {
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
         registry.add("spring.data.redis.timeout", () -> "2s");
+        registry.add("rate.limiting.enabled", () -> "true");
     }
 
     @Autowired(required = false)
