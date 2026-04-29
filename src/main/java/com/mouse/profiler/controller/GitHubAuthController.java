@@ -145,7 +145,7 @@ public class GitHubAuthController {
         }
     }
 
-    // ── GET /auth/github/callback (browser) ──────────────────────────────────
+    // ── GET /auth/github/callback (browser)
 
     /**
      * GitHub redirects the browser here after authorization.
@@ -193,7 +193,6 @@ public class GitHubAuthController {
                         req.codeVerifier()));
     }
 
-    // ── Shared callback logic
 
     /**
      * Exchanges the authorization code for a GitHub token (with PKCE verifier),
@@ -211,7 +210,7 @@ public class GitHubAuthController {
         // Fetch GitHub user profile
         GitHubDtos.GitHubUser githubUser = oauthService.fetchGitHubUser(githubToken);
 
-        // Upsert Insighta user (new users get ROLE_ANALYST automatically)
+        // Upsert Insighta user
         User user = oauthService.upsertUser(githubUser);
 
         // Inactive Guard
