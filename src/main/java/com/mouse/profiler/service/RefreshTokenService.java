@@ -5,7 +5,7 @@ import com.fasterxml.uuid.Generators;
 import com.mouse.profiler.entity.RefreshToken;
 import com.mouse.profiler.entity.User;
 import com.mouse.profiler.exception.TokenException;
-import com.mouse.profiler.jwt.JwtProperties;
+import com.mouse.profiler.securityprop.JwtProperties;
 import com.mouse.profiler.repository.RefreshTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +14,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.UUID;
 
 /**
  * Manages the Refresh Token lifecycle with SINGLE-USE ROTATION.

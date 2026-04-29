@@ -1,6 +1,6 @@
 package com.mouse.profiler.service;
 
-import com.mouse.profiler.jwt.JwtProperties;
+import com.mouse.profiler.securityprop.JwtProperties;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;

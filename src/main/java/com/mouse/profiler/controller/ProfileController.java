@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/profiles")
+@RequestMapping("/api/profiles")
 @RequiredArgsConstructor
 @CrossOrigin(
         origins = "*",
@@ -147,6 +147,8 @@ public class ProfileController {
         Pageable pageable = createPageable(page, limit, internalSortField, order);
         return ResponseEntity.ok(profileManager.searchWithNLQ(q.trim(), pageable));
     }
+
+
 
     /**
      * Maps incoming web parameters to Java Entity fields.
