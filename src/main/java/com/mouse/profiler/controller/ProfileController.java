@@ -5,11 +5,14 @@ import com.mouse.profiler.entity.Profile;
 import com.mouse.profiler.exception.InvalidInputException;
 import com.mouse.profiler.exception.InvalidQueryException;
 import com.mouse.profiler.manager.ProfileManager;
+import com.mouse.profiler.utils.CsvExportUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -28,6 +31,7 @@ import java.util.UUID;
 public class ProfileController {
 
     private final ProfileManager profileManager;
+    private final CsvExportUtil csvExportUtil;
 
     @PostMapping
     public ResponseEntity<ProfileResponseDto> createProfile(@RequestBody Map<String, String> request) {
@@ -146,6 +150,51 @@ public class ProfileController {
 
         Pageable pageable = createPageable(page, limit, internalSortField, order);
         return ResponseEntity.ok(profileManager.searchWithNLQ(q.trim(), pageable));
+    }
+
+
+    /**
+     * Export Profiles to CSV
+     * GET /api/profiles/export?format=csv&gender=male&country_id=US&age_group=adult&min_age=20&max_age=40&sort_by=age&order=desc
+     */
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportProfiles(
+            @RequestParam(name = "format", defaultValue = "csv") String format,
+            QueryCriteria criteria,
+            @RequestParam(name = "sort_by", defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String order) {
+
+        // Validate format using util
+        if (!csvExportUtil.isSupportedFormat(format)) {
+            throw new InvalidInputException("Only CSV format is supported");
+        }
+
+        // Validate and map sort field
+        validateSortField(sortBy);
+        String internalSortField = mapSortField(sortBy);
+
+        // Validate criteria
+        criteria.validate();
+
+        // Create sort
+        Sort sort = order.equalsIgnoreCase("asc")
+                ? Sort.by(internalSortField).ascending()
+                : Sort.by(internalSortField).descending();
+
+        // Get all profiles matching criteria
+        List<Profile> profiles = profileManager.getAllProfilesForExport(criteria, sort);
+
+        // Generate CSV using util
+        byte[] csvData = csvExportUtil.generateCsv(profiles);
+
+        // Generate filename using util
+        String filename = csvExportUtil.generateFilename();
+
+        return ResponseEntity
+                .ok()
+                .contentType(MediaType.parseMediaType("text/csv"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .body(csvData);
     }
 
 
