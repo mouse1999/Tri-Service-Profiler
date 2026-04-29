@@ -1,10 +1,10 @@
 package com.mouse.profiler.config;
 
-
 import com.mouse.profiler.filter.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -29,6 +29,12 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  *   <li>Stateless — no HTTP session, no CSRF.</li>
  *   <li>Inactive accounts get 403 via the Inactive Guard in
  *       {@link JwtAuthenticationFilter}.</li>
+ * </ul>
+ *
+ * <b>RBAC (Role-Based Access Control):</b>
+ * <ul>
+ *   <li>ADMIN: Full access - can create, read, delete profiles</li>
+ *   <li>ANALYST: Read-only - can only read and search profiles</li>
  * </ul>
  */
 @Configuration
@@ -56,9 +62,34 @@ public class SecurityConfig {
                 .sessionManagement(sm ->
                         sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
-                // Authorization
+                // Authorization with RBAC
                 .authorizeHttpRequests(auth -> auth
+                        // Public endpoints (no authentication required)
                         .requestMatchers(PUBLIC_PATHS).permitAll()
+
+
+                        // CREATE PROFILE - ADMIN only (POST /api/profiles)
+                        .requestMatchers(HttpMethod.POST, "/api/profiles").hasRole("ADMIN")
+
+                        // DELETE PROFILE - ADMIN only (DELETE /api/profiles/{id})
+                        .requestMatchers(HttpMethod.DELETE, "/api/profiles/**").hasRole("ADMIN")
+
+                        // READ PROFILES - Both ADMIN and ANALYST (GET endpoints)
+                        .requestMatchers(HttpMethod.GET, "/api/profiles/**").hasAnyRole("ADMIN", "ANALYST")
+
+                        // SEARCH PROFILES - Both ADMIN and ANALYST
+                        .requestMatchers(HttpMethod.GET, "/api/profiles/search").hasAnyRole("ADMIN", "ANALYST")
+
+                        // EXPORT PROFILES - Both ADMIN and ANALYST
+                        .requestMatchers(HttpMethod.GET, "/api/profiles/export").hasAnyRole("ADMIN", "ANALYST")
+
+                        // GET single profile - Both ADMIN and ANALYST
+                        .requestMatchers(HttpMethod.GET, "/api/profiles/{id}").hasAnyRole("ADMIN", "ANALYST")
+
+                        // GET all profiles - Both ADMIN and ANALYST
+                        .requestMatchers(HttpMethod.GET, "/api/profiles/all").hasAnyRole("ADMIN", "ANALYST")
+
+                        // All other endpoints require authentication (any role)
                         .anyRequest().authenticated()
                 )
 
@@ -66,8 +97,11 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                         // 403 for inactive accounts or insufficient role
-                        .accessDeniedHandler((req, res, e) ->
-                                res.sendError(HttpStatus.FORBIDDEN.value(), "Access Denied"))
+                        .accessDeniedHandler((req, res, e) -> {
+                            res.setStatus(HttpStatus.FORBIDDEN.value());
+                            res.setContentType("application/json");
+                            res.getWriter().write("{\"status\":\"error\",\"message\":\"Access Denied\"}");
+                        })
                 )
 
                 // JWT filter runs before standard auth filter
