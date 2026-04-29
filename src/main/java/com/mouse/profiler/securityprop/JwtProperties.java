@@ -1,4 +1,4 @@
-package com.mouse.profiler.jwt;
+package com.mouse.profiler.securityprop;
 
 
 import lombok.Getter;
