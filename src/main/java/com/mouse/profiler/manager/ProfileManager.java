@@ -148,7 +148,6 @@ public class ProfileManager {
         Specification<Profile> spec = ProfileSpecification.build(criteria);
         Page<Profile> resultPage = managerRepository.findAll(spec, pageable);
 
-        // Check if the page has no data
         if (resultPage.isEmpty()) {
             throw new ProfileNotFoundException("Profile not found");
         }
@@ -157,7 +156,8 @@ public class ProfileManager {
                 resultPage.getContent(),
                 resultPage.getNumber() + 1,
                 resultPage.getSize(),
-                resultPage.getTotalElements()
+                resultPage.getTotalElements(),
+                "/api/profiles"
         );
     }
 }
