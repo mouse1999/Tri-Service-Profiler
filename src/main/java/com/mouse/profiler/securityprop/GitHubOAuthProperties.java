@@ -27,6 +27,7 @@ public class GitHubOAuthProperties {
     private String clientId;
     private String clientSecret;
     private String redirectUri;
+    private String frontendUri;
 
 
     public static final String AUTHORIZE_URL = "https://github.com/login/oauth/authorize";

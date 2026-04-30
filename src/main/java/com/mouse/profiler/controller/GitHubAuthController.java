@@ -149,6 +149,6 @@ public class GitHubAuthController {
         AuthController.setAuthCookies(response, tokens.accessToken(), tokens.refreshToken());
 
         // Redirect to frontend callback page (NOT passing tokens in URL!)
-        response.sendRedirect(props.getRedirectUri());
+        response.sendRedirect("%s/dashboard".formatted(props.getFrontendUri()));
     }
 }
