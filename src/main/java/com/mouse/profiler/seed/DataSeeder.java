@@ -9,6 +9,7 @@ import com.mouse.profiler.enums.AgeCategory;
 import com.mouse.profiler.repository.ProfileManagerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.io.Resource;
@@ -29,6 +30,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class DataSeeder {
 
+    @Value("${seeder.enabled:false}")
+    private boolean seederEnabled;
+
     private final ProfileManagerRepository profileRepository;
     private final ResourceLoader resourceLoader;
     private final ObjectMapper objectMapper;
@@ -36,6 +40,11 @@ public class DataSeeder {
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void seedData() {
+        if (!seederEnabled) {
+            log.info("Data seeder is disabled (seeder.enabled=false). Skipping.");
+            return;
+        }
+
         log.info("Checking database state for initial seeding...");
 
         try {
