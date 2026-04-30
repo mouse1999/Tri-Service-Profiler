@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
+import java.util.Map;
 
 @Slf4j
 @RestController
@@ -104,6 +105,8 @@ public class GitHubAuthController {
             oauthState = PkceUtils.generateState();
             verifierToStore = PkceUtils.generateCodeVerifier();
             challengeToSend = PkceUtils.deriveCodeChallenge(verifierToStore);
+
+            log.info("Browser OAuth initiated - state: {}, challenge: {}", oauthState, challengeToSend);
         }
 
         stateStore.put(oauthState, verifierToStore);
@@ -124,8 +127,8 @@ public class GitHubAuthController {
             return ResponseEntity.ok(new GitHubDtos.InitiateResponse(authorizeUrl, oauthState));
         }
 
-        response.sendRedirect(authorizeUrl);
-        return null;
+        // FIX: Return JSON for browser flow (not redirect)
+        return ResponseEntity.ok(Map.of("authorize_url", authorizeUrl));
     }
 
 
