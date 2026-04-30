@@ -4,7 +4,5 @@ package com.mouse.profiler.dto;
 public record TokenPairResponse(
         String status,
         String accessToken,
-        String refreshToken,
-        String username,
-        String avatarUrl
+        String refreshToken
 ) {}

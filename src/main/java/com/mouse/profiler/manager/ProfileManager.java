@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j; // Lombok Logger
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -159,5 +160,20 @@ public class ProfileManager {
                 resultPage.getTotalElements(),
                 "/api/profiles"
         );
+    }
+
+    public List<Profile> getAllProfilesForExport(QueryCriteria criteria, Sort sort) {
+        // Build the same specification used in your search logic
+        Specification<Profile> spec = ProfileSpecification.build(criteria);
+
+        // Fetch all matching records using the provided sort order
+        List<Profile> profiles = managerRepository.findAll(spec, sort);
+
+        // Handle the case where no data matches the criteria
+        if (profiles.isEmpty()) {
+            throw new ProfileNotFoundException("No profiles found for the given criteria");
+        }
+
+        return profiles;
     }
 }

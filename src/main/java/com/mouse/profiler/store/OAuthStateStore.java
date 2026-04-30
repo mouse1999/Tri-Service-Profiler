@@ -87,6 +87,16 @@ public class OAuthStateStore {
         return Optional.of(entry);
     }
 
+    /**
+     * Clears all entries from the store.
+     * Useful for testing or manual cleanup.
+     */
+    public void clear() {
+        int before = store.size();
+        store.clear();
+        log.debug("Cleared {} OAuth state entries", before);
+    }
+
     @Scheduled(fixedRateString = "PT5M")
     public void purgeExpired() {
         int before = store.size();

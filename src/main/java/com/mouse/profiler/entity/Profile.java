@@ -1,6 +1,7 @@
 package com.mouse.profiler.entity;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.uuid.Generators;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -34,7 +35,7 @@ public class Profile {
 
     @Id
     @Column(columnDefinition = "UUID")
-    private UUID id; // UUID v7 (assigned by DataSeeder)
+    private UUID id;
 
     @Column(nullable = false, unique = true)
     private String name;
@@ -75,4 +76,11 @@ public class Profile {
      */
     @Transient
     private Integer sampleSize;
+
+    @PrePersist
+    protected void onCreate() {
+        if (id == null) {
+            id = Generators.timeBasedEpochGenerator().generate();
+        }
+    }
 }
