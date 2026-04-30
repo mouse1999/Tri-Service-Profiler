@@ -14,9 +14,11 @@ import com.mouse.profiler.service.UserDetailsImpl;
 import com.mouse.profiler.service.UserService;
 import com.mouse.profiler.store.OAuthStateStore;
 import com.mouse.profiler.utils.PkceUtils;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.web.servlet.server.Session;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -128,54 +130,25 @@ public class GitHubAuthController {
 
 
     @GetMapping("/callback")
-    public ResponseEntity<TokenPairResponse> browserCallback(
+    public void browserCallback(
             @RequestParam String code,
             @RequestParam String state,
-            @RequestParam(required = false) String error
-    ) {
+            @RequestParam(required = false) String error,
+            HttpServletResponse response
+    ) throws IOException {
         if (error != null) {
             throw new OAuthException("GitHub OAuth denied by user: " + error);
-        }
-
-        if (isTestCode(code)) {
-            log.info("Test code detected in browser callback - bypassing state validation");
-            return ResponseEntity.ok(handleTestCode());
         }
 
         OAuthStateStore.StateEntry entry = stateStore.consume(state)
                 .orElseThrow(() -> new OAuthException("Invalid or expired OAuth state"));
 
-        return ResponseEntity.ok(processOAuthFlow(code, entry.codeVerifier()));
-    }
+        TokenPairResponse tokens = processOAuthFlow(code, entry.codeVerifier());
 
-    @PostMapping("/callback")
-    public ResponseEntity<TokenPairResponse> cliCallback(@RequestBody CliCallbackRequest request) {
+        // Set HTTP-only cookies
+        AuthController.setAuthCookies(response, tokens.accessToken(), tokens.refreshToken());
 
-        if (request.code() == null || request.code().isBlank()) {
-            throw new OAuthException("code is required");
-        }
-
-        if (request.state() == null || request.state().isBlank()) {
-            throw new OAuthException("state is required");
-        }
-
-        if (request.codeVerifier() == null || request.codeVerifier().isBlank()) {
-            throw new OAuthException("code_verifier is required");
-        }
-
-        if (isTestCode(request.code())) {
-            log.info("Test code detected in CLI callback - bypassing state validation");
-            return ResponseEntity.ok(handleTestCode());
-        }
-
-        // 3. Normal OAuth flow - validate state
-        OAuthStateStore.StateEntry entry = stateStore.consume(request.state())
-                .orElseThrow(() -> new OAuthException("Invalid or expired OAuth state"));
-
-        if (!"CLI_MANAGED".equals(entry.codeVerifier())) {
-            throw new OAuthException("Invalid flow: state was created for browser flow, not CLI");
-        }
-
-        return ResponseEntity.ok(processOAuthFlow(request.code(), request.codeVerifier()));
+        // Redirect to frontend callback page (NOT passing tokens in URL!)
+        response.sendRedirect(props.getRedirectUri());
     }
 }
