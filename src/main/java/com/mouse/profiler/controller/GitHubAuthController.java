@@ -39,6 +39,7 @@ public class GitHubAuthController {
     private static final String TEST_CODE = "test_code";
     private static final String TEST_ADMIN_USERNAME = "test_admin";
 
+
     private boolean isTestCode(String code) {
         return TEST_CODE.equals(code);
     }
@@ -51,9 +52,8 @@ public class GitHubAuthController {
         return new TokenPairResponse(
                 "success",
                 accessToken,
-                refreshToken.getToken(),
-                user.getUsername(),
-                user.getAvatarUrl()
+                refreshToken.getToken()
+
         );
     }
 
@@ -78,6 +78,8 @@ public class GitHubAuthController {
         log.info("Successful OAuth login: {}", user.getUsername());
         return buildTokenResponse(user);
     }
+
+
 
     @GetMapping
     public ResponseEntity<?> initiateOAuth(
@@ -124,6 +126,7 @@ public class GitHubAuthController {
         return null;
     }
 
+
     @GetMapping("/callback")
     public ResponseEntity<TokenPairResponse> browserCallback(
             @RequestParam String code,
@@ -135,6 +138,7 @@ public class GitHubAuthController {
         }
 
         if (isTestCode(code)) {
+            log.info("Test code detected in browser callback - bypassing state validation");
             return ResponseEntity.ok(handleTestCode());
         }
 
@@ -145,22 +149,33 @@ public class GitHubAuthController {
     }
 
     @PostMapping("/callback")
-    public ResponseEntity<TokenPairResponse> cliCallback(@RequestBody CliCallbackRequest req) {
-        OAuthStateStore.StateEntry entry = stateStore.consume(req.state())
+    public ResponseEntity<TokenPairResponse> cliCallback(@RequestBody CliCallbackRequest request) {
+
+        if (request.code() == null || request.code().isBlank()) {
+            throw new OAuthException("code is required");
+        }
+
+        if (request.state() == null || request.state().isBlank()) {
+            throw new OAuthException("state is required");
+        }
+
+        if (request.codeVerifier() == null || request.codeVerifier().isBlank()) {
+            throw new OAuthException("code_verifier is required");
+        }
+
+        if (isTestCode(request.code())) {
+            log.info("Test code detected in CLI callback - bypassing state validation");
+            return ResponseEntity.ok(handleTestCode());
+        }
+
+        // 3. Normal OAuth flow - validate state
+        OAuthStateStore.StateEntry entry = stateStore.consume(request.state())
                 .orElseThrow(() -> new OAuthException("Invalid or expired OAuth state"));
 
         if (!"CLI_MANAGED".equals(entry.codeVerifier())) {
             throw new OAuthException("Invalid flow: state was created for browser flow, not CLI");
         }
 
-        if (req.codeVerifier() == null || req.codeVerifier().isBlank()) {
-            throw new OAuthException("code_verifier is required for CLI flow");
-        }
-
-        if (isTestCode(req.code())) {
-            return ResponseEntity.ok(handleTestCode());
-        }
-
-        return ResponseEntity.ok(processOAuthFlow(req.code(), req.codeVerifier()));
+        return ResponseEntity.ok(processOAuthFlow(request.code(), request.codeVerifier()));
     }
 }
