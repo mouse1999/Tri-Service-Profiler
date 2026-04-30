@@ -116,13 +116,21 @@ public class CsvExportUtil {
         private String formatValue(String value) {
             if (value == null || value.isEmpty()) return "";
 
+            // Always quote if value contains comma, quote, or newline
             boolean needsQuoting = value.contains(delimiter) ||
                     value.contains(quote) ||
-                    value.contains(newLine);
+                    value.contains(newLine) ||
+                    value.contains("'") ||
+                    value.contains("\r");
 
             if (needsQuoting) {
                 String escaped = value.replace(quote, doubleQuote);
                 return quote + escaped + quote;
+            }
+
+            // Optional: Always quote strings with spaces
+            if (value.contains(" ")) {
+                return quote + value + quote;
             }
 
             return value;
