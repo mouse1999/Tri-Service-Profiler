@@ -31,11 +31,17 @@ public class GlobalExceptionHandler {
      */
 
     @ExceptionHandler(OAuthException.class)
-    public ResponseEntity<ErrorResponseDTO> handleOAuth(OAuthException ex) {
-        return ResponseEntity
-                .status(HttpStatus.UNAUTHORIZED)
-                .body(new ErrorResponseDTO("error", ex.getMessage()));
+    public ResponseEntity<ErrorResponseDTO> handleOAuthException(OAuthException e) {
+        // For validation errors return 400
+        // For authentication failures return 401
+        HttpStatus status = e.getMessage().contains("inactive")
+                ? HttpStatus.FORBIDDEN
+                : HttpStatus.BAD_REQUEST;
+
+        return ResponseEntity.status(status)
+                .body(new ErrorResponseDTO("error", e.getMessage()));
     }
+
 
     @ExceptionHandler(DisabledException.class)
     public ResponseEntity<ErrorResponseDTO> handleDisabled(DisabledException ex) {

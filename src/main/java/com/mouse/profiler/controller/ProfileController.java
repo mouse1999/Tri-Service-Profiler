@@ -65,21 +65,21 @@ public class ProfileController {
                 .body(new ProfileResponseDto("success", ProfileDto.fromEntity(profile)));
     }
 
-    @GetMapping("/all")
-    public ResponseEntity<ProfileListResponseDto> getAllProfiles(
-            @RequestParam(required = false) String gender,
-            @RequestParam(required = false, name = "country_id") String countryId,
-            @RequestParam(required = false, name = "age_group") String ageGroup) {
-
-        List<Profile> profiles = profileManager.getAllProfiles(gender, countryId, ageGroup);
-        List<ProfileDto> dtos = profiles.stream().map(ProfileDto::fromEntity).toList();
-
-        return ResponseEntity
-                .ok()
-                .header("Access-Control-Allow-Origin", "*")
-                .body(new ProfileListResponseDto("success", dtos.size(), dtos));
-
-    }
+//    @GetMapping("")
+//    public ResponseEntity<ProfileListResponseDto> getAllProfiles(
+//            @RequestParam(required = false) String gender,
+//            @RequestParam(required = false, name = "country_id") String countryId,
+//            @RequestParam(required = false, name = "age_group") String ageGroup) {
+//
+//        List<Profile> profiles = profileManager.getAllProfiles(gender, countryId, ageGroup);
+//        List<ProfileDto> dtos = profiles.stream().map(ProfileDto::fromEntity).toList();
+//
+//        return ResponseEntity
+//                .ok()
+//                .header("Access-Control-Allow-Origin", "*")
+//                .body(new ProfileListResponseDto("success", dtos.size(), dtos));
+//
+//    }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
