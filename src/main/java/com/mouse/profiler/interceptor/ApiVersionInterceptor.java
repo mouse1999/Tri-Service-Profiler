@@ -51,7 +51,7 @@ public class ApiVersionInterceptor implements HandlerInterceptor {
         String version = request.getHeader(VERSION_HEADER);
 
         if (isBlank(version)) {
-            return reject(response, "API version header required. Supported versions: " + SUPPORTED_VERSIONS);
+            return reject(response, "API version header required");
         }
 
         if (!version.matches("\\d+")) {
