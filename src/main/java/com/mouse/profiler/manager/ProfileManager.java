@@ -149,10 +149,6 @@ public class ProfileManager {
         Specification<Profile> spec = ProfileSpecification.build(criteria);
         Page<Profile> resultPage = managerRepository.findAll(spec, pageable);
 
-        if (resultPage.isEmpty()) {
-            throw new ProfileNotFoundException("Profile not found");
-        }
-
         return NewProfileResponseDto.success(
                 resultPage.getContent(),
                 resultPage.getNumber() + 1,
@@ -163,17 +159,7 @@ public class ProfileManager {
     }
 
     public List<Profile> getAllProfilesForExport(QueryCriteria criteria, Sort sort) {
-        // Build the same specification used in your search logic
         Specification<Profile> spec = ProfileSpecification.build(criteria);
-
-        // Fetch all matching records using the provided sort order
-        List<Profile> profiles = managerRepository.findAll(spec, sort);
-
-        // Handle the case where no data matches the criteria
-        if (profiles.isEmpty()) {
-            throw new ProfileNotFoundException("No profiles found for the given criteria");
-        }
-
-        return profiles;
+        return managerRepository.findAll(spec, sort);
     }
 }

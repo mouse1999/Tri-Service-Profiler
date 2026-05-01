@@ -63,19 +63,19 @@ public class AuthController {
         String newAccessToken = jwtService.generateAccessToken(principal);
         RefreshToken newRt = refreshTokenService.create(user);
 
-        return ResponseEntity.ok(new TokenResponse(newAccessToken, newRt.getToken()));
+        return ResponseEntity.ok(new TokenResponse("success", newAccessToken, newRt.getToken()));
     }
 
     // ── Logout ────────────────────────────────────────────────────────────────
 
     /**
-     * Revokes ALL refresh tokens for the user identified by the presented token.
+     * Invalidates the presented refresh token server-side.
      * Access tokens are short-lived (3 min) and expire naturally.
+     * Does NOT rotate — just deletes so it can never be used again.
      */
     @PostMapping("/auth/logout")
     public ResponseEntity<Void> logout(@RequestBody RefreshRequest req) {
-        User user = refreshTokenService.rotate(req.refreshToken());
-        refreshTokenService.revokeAll(user);
+        refreshTokenService.invalidate(req.refreshToken());
         return ResponseEntity.noContent().build();
     }
 
@@ -134,7 +134,7 @@ public class AuthController {
 
     /**
      * Creates HTTP-only cookies for access and refresh tokens.
-     * Use this in your GitHubAuthController after successful OAuth.
+     * this is used in GitHubAuthController after successful OAuth.
      */
     public static void setAuthCookies(HttpServletResponse response, String accessToken, String refreshToken) {
         Cookie accessCookie = new Cookie("access_token", accessToken);

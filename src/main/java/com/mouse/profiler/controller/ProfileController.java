@@ -23,11 +23,6 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/profiles")
 @RequiredArgsConstructor
-@CrossOrigin(
-        origins = "*",
-        allowedHeaders = "*",
-        methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.DELETE, RequestMethod.OPTIONS}
-) // Critical Requirement: Access-Control-Allow-Origin: *
 public class ProfileController {
 
     private final ProfileManager profileManager;
@@ -37,13 +32,12 @@ public class ProfileController {
     public ResponseEntity<ProfileResponseDto> createProfile(@RequestBody Map<String, String> request) {
         String name = request.get("name");
 
-        // 1. Basic Null/Empty check (Matches your Manager logic)
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("Missing or empty name");
         }
 
-        // 2. Regex to enforce ONLY letters (A-Z, a-z)
-        if (!name.matches("^[a-zA-Z]+$")) {
+        // Regex: letters, spaces, hyphens, apostrophes e.g. "Harriet Tubman", "Mary-Jane", "O'Brien"
+        if (!name.matches("^[a-zA-Z][a-zA-Z\\s\\-']*$")) {
             throw new InvalidInputException("Invalid type");
         }
 
@@ -52,17 +46,13 @@ public class ProfileController {
 
         return ResponseEntity
                 .status(HttpStatus.CREATED)
-                .header("Access-Control-Allow-Origin", "*")
                 .body(new ProfileResponseDto("success", profile));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<ProfileResponseDto> getProfile(@PathVariable UUID id) {
         Profile profile = profileManager.getProfile(id);
-        return ResponseEntity.
-                ok()
-                .header("Access-Control-Allow-Origin", "*")
-                .body(new ProfileResponseDto("success", ProfileDto.fromEntity(profile)));
+        return ResponseEntity.ok(new ProfileResponseDto("success", ProfileDto.fromEntity(profile)));
     }
 
 //    @GetMapping("")
@@ -134,7 +124,7 @@ public class ProfileController {
             @RequestParam(name = "limit", defaultValue = "10") String limitStr) {
 
         if (q == null || q.trim().isBlank()) {
-        
+
             throw new InvalidQueryException("Invalid query parameter");
         }
 
@@ -238,7 +228,7 @@ public class ProfileController {
         try {
             return Integer.parseInt(val);
         } catch (NumberFormatException e) {
-            
+
             return defaultVal;
         }
     }
