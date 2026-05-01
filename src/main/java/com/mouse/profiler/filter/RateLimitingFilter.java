@@ -47,7 +47,14 @@ public class RateLimitingFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         String path = request.getRequestURI();
+        String method = request.getMethod();
         boolean isAuthPath = path != null && path.startsWith(AUTH_PATH_PREFIX);
+
+        log.info("========================================");
+        log.info("RATE LIMITING FILTER - Processing request");
+        log.info("Method: {}, Path: {}", method, path);
+        log.info("Is Auth Path: {}", isAuthPath);
+        log.info("========================================");
 
         String bucketKey;
         Supplier<BucketConfiguration> configSupplier;
@@ -56,59 +63,92 @@ public class RateLimitingFilter extends OncePerRequestFilter {
             String clientIp = getClientIp(request);
             bucketKey = "auth:" + clientIp;
             configSupplier = authBucketConfiguration;
-            log.debug("Auth endpoint - rate limiting by IP: {}", clientIp);
+            log.info("AUTH endpoint - Rate limiting by IP: {}", clientIp);
+            log.info("Bucket key: {}", bucketKey);
         } else {
             String username = extractUsernameFromRequest(request);
             if (username == null) {
+                log.warn("No username found in token, skipping rate limiting");
                 filterChain.doFilter(request, response);
                 return;
             }
             bucketKey = "api:" + username;
             configSupplier = apiBucketConfiguration;
-            log.debug("API endpoint - rate limiting by user: {}", username);
+            log.info("API endpoint - Rate limiting by user: {}", username);
+            log.info("Bucket key: {}", bucketKey);
         }
 
-        Bucket bucket = bucketCache.computeIfAbsent(bucketKey,
-                key -> proxyManager.builder().build(key, configSupplier));
+        try {
+            log.info("Getting or creating bucket for key: {}", bucketKey);
+            Bucket bucket = bucketCache.computeIfAbsent(bucketKey,
+                    key -> {
+                        log.info("Creating new bucket for key: {}", key);
+                        return proxyManager.builder().build(key, configSupplier);
+                    });
 
-        ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
+            log.info("Attempting to consume 1 token from bucket");
+            ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
 
-        if (probe.isConsumed()) {
-            response.addHeader("X-Rate-Limit-Remaining", String.valueOf(probe.getRemainingTokens()));
-            filterChain.doFilter(request, response);
-        } else {
-            long retryAfterSeconds = TimeUnit.NANOSECONDS.toSeconds(probe.getNanosToWaitForRefill());
-            if (retryAfterSeconds < MIN_RETRY_AFTER_SECONDS) {
-                retryAfterSeconds = MIN_RETRY_AFTER_SECONDS;
+            log.info("Consumption result:");
+            log.info("  - Token consumed: {}", probe.isConsumed());
+            log.info("  - Remaining tokens: {}", probe.getRemainingTokens());
+            log.info("  - Nanos to wait for refill: {}", probe.getNanosToWaitForRefill());
+
+            if (probe.isConsumed()) {
+                log.info("✅ Rate limit check PASSED - Request allowed");
+                response.addHeader("X-Rate-Limit-Remaining", String.valueOf(probe.getRemainingTokens()));
+                filterChain.doFilter(request, response);
+            } else {
+                long retryAfterSeconds = TimeUnit.NANOSECONDS.toSeconds(probe.getNanosToWaitForRefill());
+                if (retryAfterSeconds < MIN_RETRY_AFTER_SECONDS) {
+                    retryAfterSeconds = MIN_RETRY_AFTER_SECONDS;
+                }
+                log.warn("🚫 Rate limit EXCEEDED - Request rejected");
+                log.warn("  - Bucket key: {}", bucketKey);
+                log.warn("  - Retry after: {} seconds", retryAfterSeconds);
+                rejectRequest(response, retryAfterSeconds);
             }
-            rejectRequest(response, retryAfterSeconds);
+        } catch (Exception e) {
+            log.error("❌ Rate limiting filter error: {}", e.getMessage(), e);
+            log.warn("Falling through to allow request due to error");
+            filterChain.doFilter(request, response);
         }
     }
 
     private String getClientIp(HttpServletRequest request) {
         String xForwardedFor = request.getHeader("X-Forwarded-For");
         if (xForwardedFor != null && !xForwardedFor.isBlank()) {
-            return xForwardedFor.split(",")[0].trim();
+            String ip = xForwardedFor.split(",")[0].trim();
+            log.debug("Client IP from X-Forwarded-For: {}", ip);
+            return ip;
         }
         String xRealIp = request.getHeader("X-Real-IP");
         if (xRealIp != null && !xRealIp.isBlank()) {
-            return xRealIp.trim();
+            log.debug("Client IP from X-Real-IP: {}", xRealIp);
+            return xRealIp;
         }
-        return request.getRemoteAddr();
+        String remoteAddr = request.getRemoteAddr();
+        log.debug("Client IP from RemoteAddr: {}", remoteAddr);
+        return remoteAddr;
     }
 
     private String extractUsernameFromRequest(HttpServletRequest request) {
         String authHeader = request.getHeader("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            log.debug("No Bearer token found in Authorization header");
             return null;
         }
         String token = authHeader.substring(7);
+        log.debug("Extracted token: {}...", token.substring(0, Math.min(20, token.length())));
+
         try {
             if (!jwtService.isValid(token)) {
                 log.debug("Invalid JWT token");
                 return null;
             }
-            return jwtService.extractUsername(token);
+            String username = jwtService.extractUsername(token);
+            log.debug("Extracted username: {}", username);
+            return username;
         } catch (Exception e) {
             log.debug("Failed to extract username from token: {}", e.getMessage());
             return null;
@@ -116,6 +156,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     }
 
     private void rejectRequest(HttpServletResponse response, long retryAfterSeconds) throws IOException {
+        log.info("Sending 429 Too Many Requests response");
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setContentType("application/json");
         response.addHeader("Retry-After", String.valueOf(retryAfterSeconds));
@@ -127,10 +168,15 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         );
 
         objectMapper.writeValue(response.getWriter(), errorResponse);
+        log.info("429 response sent");
     }
 
     @Override
     protected void initFilterBean() {
-        log.info("Rate limiting filter initialized - Auth: IP based, API: Username based");
+        log.info("========================================");
+        log.info("RATE LIMITING FILTER INITIALIZED");
+        log.info("Auth endpoints: IP-based rate limiting");
+        log.info("API endpoints: Username-based rate limiting");
+        log.info("========================================");
     }
 }
