@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -65,7 +66,10 @@ public class OAuthStateStore {
             throw new IllegalArgumentException(
                     "codeVerifier must not be null — PKCE is required for all flows");
         }
+        log.info("🔐 STORE PUT - State: {}, Verifier: {}, Store size before: {}",
+                state, codeVerifier, store.size());
         store.put(state, new StateEntry(codeVerifier, Instant.now()));
+        log.info("🔐 STORE PUT - Store size after: {}", store.size());
     }
 
     /**
@@ -75,15 +79,20 @@ public class OAuthStateStore {
      * @return StateEntry (containing the codeVerifier) if valid
      */
     public Optional<StateEntry> consume(String state) {
+        log.info("🔐 STORE CONSUME - Looking for state: {}, Store size before: {}",
+                state, store.size());
+        log.info("🔐 STORE CONSUME - Available keys: {}", store.keySet());
+
         StateEntry entry = store.remove(state);
         if (entry == null) {
-            log.warn("OAuth state not found or already used: {}", state);
+            log.warn("❌ STORE CONSUME - State not found or already used: {}", state);
             return Optional.empty();
         }
         if (entry.isExpired()) {
-            log.warn("OAuth state expired for key: {}", state);
+            log.warn("❌ STORE CONSUME - State expired for key: {}", state);
             return Optional.empty();
         }
+        log.info("✅ STORE CONSUME - State found and consumed: {}", state);
         return Optional.of(entry);
     }
 
@@ -95,6 +104,27 @@ public class OAuthStateStore {
         int before = store.size();
         store.clear();
         log.debug("Cleared {} OAuth state entries", before);
+    }
+
+    /**
+     * Returns the current number of entries in the store.
+     */
+    public int size() {
+        return store.size();
+    }
+
+    /**
+     * Returns all keys in the store (for debugging).
+     */
+    public Set<String> getAllKeys() {
+        return store.keySet();
+    }
+
+    /**
+     * Checks if a state exists in the store.
+     */
+    public boolean contains(String state) {
+        return store.containsKey(state);
     }
 
     @Scheduled(fixedRateString = "PT5M")
