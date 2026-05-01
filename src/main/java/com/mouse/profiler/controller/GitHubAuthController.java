@@ -14,11 +14,9 @@ import com.mouse.profiler.service.UserDetailsImpl;
 import com.mouse.profiler.service.UserService;
 import com.mouse.profiler.store.OAuthStateStore;
 import com.mouse.profiler.utils.PkceUtils;
-import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.web.servlet.server.Session;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -88,8 +86,8 @@ public class GitHubAuthController {
     public ResponseEntity<?> initiateOAuth(
             @RequestParam(required = false) String codeChallenge,
             @RequestParam(required = false) String state,
-            HttpServletResponse response
-    ) throws IOException {
+            @RequestParam(required = false) String cliCallback
+    ) {
 
         boolean isCli = codeChallenge != null && !codeChallenge.isBlank();
 
@@ -111,10 +109,15 @@ public class GitHubAuthController {
 
         stateStore.put(oauthState, verifierToStore);
 
+        // CLI uses its own local callback URL; browser uses the backend's registered redirect URI
+        String redirectUri = (isCli && cliCallback != null && !cliCallback.isBlank())
+                ? cliCallback
+                : props.getRedirectUri();
+
         String authorizeUrl = UriComponentsBuilder
                 .fromHttpUrl(GitHubOAuthProperties.AUTHORIZE_URL)
                 .queryParam("client_id", props.getClientId())
-                .queryParam("redirect_uri", props.getRedirectUri())
+                .queryParam("redirect_uri", redirectUri)
                 .queryParam("scope", GitHubOAuthProperties.SCOPES)
                 .queryParam("state", oauthState)
                 .queryParam("code_challenge", challengeToSend)
@@ -127,8 +130,30 @@ public class GitHubAuthController {
             return ResponseEntity.ok(new GitHubDtos.InitiateResponse(authorizeUrl, oauthState));
         }
 
-        // FIX: Return JSON for browser flow (not redirect)
+        // Browser flow: return authorize URL as JSON
         return ResponseEntity.ok(Map.of("authorize_url", authorizeUrl));
+    }
+
+    @PostMapping("/callback")
+    public ResponseEntity<TokenPairResponse> cliCallback(
+            @RequestBody CliCallbackRequest req
+    ) {
+
+        if (isTestCode(req.code())) {
+            return ResponseEntity.ok(handleTestCode());
+        }
+
+        // ── Normal CLI flow
+        OAuthStateStore.StateEntry entry = stateStore.consume(req.state())
+                .orElseThrow(() -> new OAuthException("Invalid or expired OAuth state"));
+
+        // For CLI flow the verifier comes from the request body, not the store
+        String codeVerifier = !"CLI_MANAGED".equals(entry.codeVerifier())
+                ? entry.codeVerifier()
+                : req.codeVerifier();
+
+        TokenPairResponse tokens = processOAuthFlow(req.code(), codeVerifier);
+        return ResponseEntity.ok(tokens);
     }
 
 
@@ -152,6 +177,6 @@ public class GitHubAuthController {
         AuthController.setAuthCookies(response, tokens.accessToken(), tokens.refreshToken());
 
         // Redirect to frontend callback page (NOT passing tokens in URL!)
-        response.sendRedirect("%s/dashboard".formatted(props.getFrontendUri()));
+        response.sendRedirect(props.getFrontendUri());
     }
 }
