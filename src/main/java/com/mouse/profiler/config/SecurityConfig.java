@@ -50,6 +50,7 @@ public class SecurityConfig {
             "/public/**",
             "/oauth2/**",           // GitHub OAuth callback
             "/login/oauth2/**",
+            "/api/me",              // handled by its own cookie/token validation logic
     };
 
     @Bean
