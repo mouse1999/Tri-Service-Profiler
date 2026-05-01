@@ -50,6 +50,7 @@ public class User {
                     @Index(name = "idx_user_roles_role_id", columnList = "role_id")
             }
     )
+    @Builder.Default
     private Set<Role> roles = new HashSet<>();
 
     @Column(name = "is_active")
@@ -67,6 +68,11 @@ public class User {
 
         if (this.id == null) {
             this.id = Generators.timeBasedEpochGenerator().generate();
+        }
+        
+        // Additional safety: ensure roles is never null
+        if (this.roles == null) {
+            this.roles = new HashSet<>();
         }
     }
 }
