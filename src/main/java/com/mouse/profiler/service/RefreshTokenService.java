@@ -36,7 +36,7 @@ public class RefreshTokenService {
     private final RefreshTokenRepository repo;
     private final JwtProperties props;
 
-    // ── Create ───────────────────────────────────────────────────────────────
+    // ── Create
 
     /**
      * Creates and persists a new single-use refresh token for the given user.
@@ -51,7 +51,7 @@ public class RefreshTokenService {
         return repo.save(rt);
     }
 
-    // ── Rotate (single-use) ───────────────────────────────────────────────────
+    // ── Rotate (single-use)
 
     /**
      * Validates the incoming refresh token, deletes it (single-use), and returns
@@ -67,7 +67,7 @@ public class RefreshTokenService {
                 .orElseThrow(() -> new TokenException("Refresh token not found or already used"));
 
         if (rt.isRevoked()) {
-            // Token was explicitly revoked — possible replay attack. Wipe all tokens for this user.
+            // Token was explicitly revoked could be a possible replay attack. Wipe all tokens for this user.
             log.warn("Revoked refresh token replayed for user {}. Wiping all tokens.", rt.getUser().getId());
             repo.deleteByUser(rt.getUser());
             throw new TokenException("Refresh token has been revoked");
@@ -80,7 +80,7 @@ public class RefreshTokenService {
 
         User owner = rt.getUser();
 
-        // ── SINGLE-USE: delete the old token immediately ──
+        // delete the old token immediately
         repo.delete(rt);
 
         return owner;
@@ -92,6 +92,22 @@ public class RefreshTokenService {
     @Transactional
     public void revokeAll(User user) {
         repo.deleteByUser(user);
+    }
+
+    /**
+     * Invalidates a single refresh token for logout.
+     * Unlike rotate(), this does not return a new token pair — it simply
+     * deletes the token so it can never be used again.
+     *
+     * @param rawToken the refresh token string from the client
+     * @throws TokenException if the token is not found or already expired/revoked
+     */
+    @Transactional
+    public void invalidate(String rawToken) {
+        RefreshToken rt = repo.findByToken(rawToken)
+                .orElseThrow(() -> new TokenException("Refresh token not found or already used"));
+        repo.delete(rt);
+        log.debug("Refresh token invalidated for user {}", rt.getUser().getId());
     }
 
     // ── Scheduled Cleanup
