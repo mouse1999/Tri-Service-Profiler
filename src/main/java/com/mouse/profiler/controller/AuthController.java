@@ -85,7 +85,7 @@ public class AuthController {
      * Returns the currently authenticated user's information.
      * The access token is read from the HTTP-only cookie.
      */
-    @GetMapping("/api/me")
+    @GetMapping("/auth/me")
     public ResponseEntity<?> getCurrentUser(
             @CookieValue(name = "access_token", required = false) String accessToken,
             @CookieValue(name = "refresh_token", required = false) String refreshToken
