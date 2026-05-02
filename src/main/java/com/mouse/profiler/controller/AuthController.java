@@ -141,14 +141,16 @@ public class AuthController {
         accessCookie.setHttpOnly(true);
         accessCookie.setSecure(true);
         accessCookie.setPath("/");
-        accessCookie.setMaxAge(15 * 60); // 15 minutes
+        accessCookie.setMaxAge(15 * 60);
+        accessCookie.setAttribute("SameSite", "None");
         response.addCookie(accessCookie);
 
         Cookie refreshCookie = new Cookie("refresh_token", refreshToken);
         refreshCookie.setHttpOnly(true);
         refreshCookie.setSecure(true);
         refreshCookie.setPath("/");
-        refreshCookie.setMaxAge(7 * 24 * 60 * 60); // 7 days
+        refreshCookie.setMaxAge(7 * 24 * 60 * 60);
+        refreshCookie.setAttribute("SameSite", "None");
         response.addCookie(refreshCookie);
     }
 }
