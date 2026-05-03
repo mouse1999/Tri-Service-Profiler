@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import com.mouse.profiler.entity.Profile;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @JsonPropertyOrder({
@@ -32,8 +33,8 @@ public record ProfileDto(
         @JsonProperty("country_probability")
         Float countryProbability,
 
-        @JsonProperty("created_at")
-        java.time.OffsetDateTime createdAt
+
+        OffsetDateTime createdAt
 ) {
     public static ProfileDto fromEntity(Profile profile) {
         return new ProfileDto(
