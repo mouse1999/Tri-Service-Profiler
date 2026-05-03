@@ -1,6 +1,5 @@
 package com.mouse.profiler.controller;
 
-import com.mouse.profiler.dto.jwt.RefreshRequest;
 import com.mouse.profiler.dto.jwt.TokenResponse;
 import com.mouse.profiler.entity.RefreshToken;
 import com.mouse.profiler.entity.User;
@@ -12,10 +11,13 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -25,9 +27,9 @@ import java.util.Map;
  * The OAuth callback (handled by GitHubAuthController) issues the first token pair.
  * This controller handles:
  *
- *   POST /auth/refresh  → single-use refresh token rotation
- *   POST /auth/logout   → revoke all refresh tokens for the user
- *   GET  /api/me        → get current authenticated user info (from cookie)
+ *   POST /auth/refresh → single-use refresh token rotation
+ *   POST /auth/logout  → revoke all refresh tokens for the user
+ *   GET  /api/me  → get current authenticated user info (from cookie)
  *
  * There is intentionally NO /auth/login with username+password — credentials
  * are never held server-side.
@@ -51,35 +53,60 @@ public class AuthController {
      * call gets 401 — the row was already deleted on first use.
      */
     @PostMapping("/auth/refresh")
-    public ResponseEntity<TokenResponse> refresh(@RequestBody RefreshRequest req) {
-        User user = refreshTokenService.rotate(req.refreshToken());
+    public ResponseEntity<TokenResponse> refresh(
+            @CookieValue(name = "refresh_token", required = false) String refreshToken
+    ) {
+        if (refreshToken == null) return ResponseEntity.status(401).build();
 
+        User user = refreshTokenService.rotate(refreshToken);
         UserDetailsImpl principal = new UserDetailsImpl(user);
 
-        if (!principal.isEnabled()) {
-            return ResponseEntity.status(403).build();
-        }
+        if (!principal.isEnabled()) return ResponseEntity.status(403).build();
 
         String newAccessToken = jwtService.generateAccessToken(principal);
         RefreshToken newRt = refreshTokenService.create(user);
 
-        return ResponseEntity.ok(new TokenResponse("success", newAccessToken, newRt.getToken()));
+        ResponseCookie newRefreshCookie = ResponseCookie.from("refresh_token", newRt.getToken())
+                .httpOnly(true)
+                .secure(true)
+                .sameSite("Strict")
+                .path("/auth/refresh")
+                .maxAge(Duration.ofDays(7))
+                .build();
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, newRefreshCookie.toString())
+                .body(new TokenResponse("success", newAccessToken, null));
     }
 
-    // ── Logout ────────────────────────────────────────────────────────────────
 
     /**
-     * Invalidates the presented refresh token server-side.
+     * Invalidates the refresh token stored in the HTTP-only cookie.
      * Access tokens are short-lived (3 min) and expire naturally.
-     * Does NOT rotate — just deletes so it can never be used again.
+     * Clears the refresh_token cookie so it can never be used again.
      */
     @PostMapping("/auth/logout")
-    public ResponseEntity<Void> logout(@RequestBody RefreshRequest req) {
-        refreshTokenService.invalidate(req.refreshToken());
-        return ResponseEntity.noContent().build();
+    public ResponseEntity<Void> logout(
+            @CookieValue(name = "refresh_token", required = false) String refreshToken
+    ) {
+        if (refreshToken != null) {
+            refreshTokenService.invalidate(refreshToken);
+        }
+
+        ResponseCookie cleared = ResponseCookie.from("refresh_token", "")
+                .httpOnly(true)
+                .secure(true)
+                .sameSite("Strict")
+                .path("/auth/refresh")
+                .maxAge(0)  // immediately expire the cookie
+                .build();
+
+        return ResponseEntity.noContent()
+                .header(HttpHeaders.SET_COOKIE, cleared.toString())
+                .build();
     }
 
-    // ── Get Current User (from cookie) ────────────────────────────────────────
+
 
     /**
      * Returns the currently authenticated user's information.
@@ -130,7 +157,6 @@ public class AuthController {
         ));
     }
 
-    // ── Set Cookies Helper (for GitHubAuthController to use) ─────────────────
 
     /**
      * Creates HTTP-only cookies for access and refresh tokens.
