@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Integration tests for {@link RateLimitingFilter}.
  */
 @TestPropertySource(properties = {
+        "cors.allowed.origins=http://localhost:3000,http://localhost:5173",
         "rate.limiting.enabled=true",
         "rate.limit.auth.requests=10",
         "rate.limit.auth.duration.seconds=5",
