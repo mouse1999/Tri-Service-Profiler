@@ -1,5 +1,6 @@
 package com.mouse.profiler.controller;
 
+import com.mouse.profiler.dto.RefreshRequest;
 import com.mouse.profiler.dto.jwt.TokenResponse;
 import com.mouse.profiler.entity.RefreshToken;
 import com.mouse.profiler.entity.User;
@@ -20,20 +21,6 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Duration;
 import java.util.Map;
 
-/**
- * Auth endpoints — all under /auth/** (open, no JWT required).
- *
- * This application uses GitHub OAuth for initial login.
- * The OAuth callback (handled by GitHubAuthController) issues the first token pair.
- * This controller handles:
- *
- *   POST /auth/refresh → single-use refresh token rotation
- *   POST /auth/logout  → revoke all refresh tokens for the user
- *   GET  /api/me  → get current authenticated user info (from cookie)
- *
- * There is intentionally NO /auth/login with username+password — credentials
- * are never held server-side.
- */
 @Slf4j
 @RestController
 @RequiredArgsConstructor
@@ -43,47 +30,70 @@ public class AuthController {
     private final RefreshTokenService refreshTokenService;
     private final UserService userService;
 
-    // ── Refresh (single-use rotation) ─────────────────────────────────────────
-
     /**
      * Validates the incoming refresh token, DELETES it (single-use), and
      * returns a brand-new access + refresh token pair.
      *
-     * Replay protection: if the same token is presented twice the second
-     * call gets 401 — the row was already deleted on first use.
+     * Web:  reads refresh token from HTTP-only cookie, sets new cookies
+     * CLI:  reads refresh token from request body, returns full JSON TokenResponse
      */
     @PostMapping("/auth/refresh")
     public ResponseEntity<TokenResponse> refresh(
-            @CookieValue(name = "refresh_token", required = false) String refreshToken
+            @CookieValue(name = "refresh_token", required = false) String cookieRefreshToken,
+            @RequestBody(required = false) RefreshRequest body,
+            HttpServletResponse response
     ) {
-        if (refreshToken == null) return ResponseEntity.status(401).build();
+        boolean isCli = cookieRefreshToken == null && body != null && body.refreshToken() != null;
+        String refreshToken = isCli ? body.refreshToken() : cookieRefreshToken;
+
+        if (refreshToken == null)
+            return ResponseEntity
+                    .status(401).build();
 
         User user = refreshTokenService.rotate(refreshToken);
         UserDetailsImpl principal = new UserDetailsImpl(user);
 
-        if (!principal.isEnabled()) return ResponseEntity.status(403).build();
+        if (!principal.isEnabled())
+            return ResponseEntity
+                    .status(403).build();
 
         String newAccessToken = jwtService.generateAccessToken(principal);
         RefreshToken newRt = refreshTokenService.create(user);
 
+        if (isCli) {
+            // CLI — return full token pair as JSON, no cookies
+            return ResponseEntity
+                    .ok(new TokenResponse("success",
+                            newAccessToken, newRt.getToken()));
+        }
+
+        // Web — set HTTP-only cookies, omit tokens from body
         ResponseCookie newRefreshCookie = ResponseCookie.from("refresh_token", newRt.getToken())
                 .httpOnly(true)
                 .secure(true)
-                .sameSite("Strict")
+                .sameSite("None")
                 .path("/auth/refresh")
                 .maxAge(Duration.ofDays(7))
                 .build();
 
+        ResponseCookie newAccessCookie = ResponseCookie.from("access_token", newAccessToken)
+                .httpOnly(true)
+                .secure(true)
+                .sameSite("None")
+                .path("/")
+                .maxAge(Duration.ofMinutes(15))
+                .build();
+
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, newRefreshCookie.toString())
+                .header(HttpHeaders.SET_COOKIE, newAccessCookie.toString())
                 .body(new TokenResponse("success", newAccessToken, null));
     }
 
-
     /**
      * Invalidates the refresh token stored in the HTTP-only cookie.
-     * Access tokens are short-lived (3 min) and expire naturally.
-     * Clears the refresh_token cookie so it can never be used again.
+     * Access tokens are short-lived and expire naturally.
+     * Clears both cookies so they can never be used again.
      */
     @PostMapping("/auth/logout")
     public ResponseEntity<Void> logout(
@@ -93,29 +103,37 @@ public class AuthController {
             refreshTokenService.invalidate(refreshToken);
         }
 
-        ResponseCookie cleared = ResponseCookie.from("refresh_token", "")
+        ResponseCookie clearedRefresh = ResponseCookie.from("refresh_token", "")
                 .httpOnly(true)
                 .secure(true)
-                .sameSite("Strict")
+                .sameSite("None")
                 .path("/auth/refresh")
-                .maxAge(0)  // immediately expire the cookie
+                .maxAge(0)
+                .build();
+
+        ResponseCookie clearedAccess = ResponseCookie.from("access_token", "")
+                .httpOnly(true)
+                .secure(true)
+                .sameSite("None")
+                .path("/")
+                .maxAge(0)
                 .build();
 
         return ResponseEntity.noContent()
-                .header(HttpHeaders.SET_COOKIE, cleared.toString())
+                .header(HttpHeaders.SET_COOKIE, clearedRefresh.toString())
+                .header(HttpHeaders.SET_COOKIE, clearedAccess.toString())
                 .build();
     }
 
-
-
     /**
      * Returns the currently authenticated user's information.
-     * The access token is read from the HTTP-only cookie.
+     * Tries access token cookie first, then silently rotates via refresh token cookie.
      */
     @GetMapping("/auth/me")
     public ResponseEntity<?> getCurrentUser(
             @CookieValue(name = "access_token", required = false) String accessToken,
-            @CookieValue(name = "refresh_token", required = false) String refreshToken
+            @CookieValue(name = "refresh_token", required = false) String refreshToken,
+            HttpServletResponse response
     ) {
         log.debug("Getting current user info");
 
@@ -131,7 +149,7 @@ public class AuthController {
                     .orElse(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
         }
 
-        // Try refresh token if access token is invalid
+        // Access token expired — try silent refresh via cookie
         if (refreshToken != null) {
             try {
                 User user = refreshTokenService.rotate(refreshToken);
@@ -139,12 +157,13 @@ public class AuthController {
                 String newAccessToken = jwtService.generateAccessToken(principal);
                 RefreshToken newRt = refreshTokenService.create(user);
 
+                // Set new cookies silently — no tokens in response body
+                setAuthCookies(response, newAccessToken, newRt.getToken());
+
                 return ResponseEntity.ok(Map.of(
                         "username", user.getUsername(),
                         "avatarUrl", user.getAvatarUrl(),
-                        "role", user.getRoles(),
-                        "accessToken", newAccessToken,
-                        "refreshToken", newRt.getToken()
+                        "role", user.getRoles()
                 ));
             } catch (Exception e) {
                 log.debug("Refresh token invalid: {}", e.getMessage());
@@ -157,10 +176,9 @@ public class AuthController {
         ));
     }
 
-
     /**
      * Creates HTTP-only cookies for access and refresh tokens.
-     * this is used in GitHubAuthController after successful OAuth.
+     * Used in GitHubAuthController after successful OAuth and in silent refresh.
      */
     public static void setAuthCookies(HttpServletResponse response, String accessToken, String refreshToken) {
         Cookie accessCookie = new Cookie("access_token", accessToken);
@@ -174,7 +192,7 @@ public class AuthController {
         Cookie refreshCookie = new Cookie("refresh_token", refreshToken);
         refreshCookie.setHttpOnly(true);
         refreshCookie.setSecure(true);
-        refreshCookie.setPath("/");
+        refreshCookie.setPath("/auth/refresh");
         refreshCookie.setMaxAge(7 * 24 * 60 * 60);
         refreshCookie.setAttribute("SameSite", "None");
         response.addCookie(refreshCookie);

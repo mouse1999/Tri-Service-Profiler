@@ -49,42 +49,21 @@ public class GitHubAuthController {
         UserDetailsImpl principal = new UserDetailsImpl(user);
         String accessToken = jwtService.generateAccessToken(principal);
         RefreshToken refreshToken = refreshTokenService.create(user);
-
-        log.debug("Tokens generated - AccessToken present: {}, RefreshToken present: {}",
-                accessToken != null, refreshToken != null);
-
-        return new TokenPairResponse(
-                "success",
-                accessToken,
-                refreshToken.getToken()
-        );
+        return new TokenPairResponse("success", accessToken, refreshToken.getToken());
     }
 
     private TokenPairResponse handleTestCode() {
-        log.info("========================================");
         log.info("TEST CODE DETECTED - Returning seeded admin user tokens");
-        log.info("========================================");
-
         User adminUser = userService.findByUsername(TEST_ADMIN_USERNAME)
                 .orElseThrow(() -> new OAuthException("Test admin user not found"));
-
-        log.info("Found test_admin user: {}", adminUser.getUsername());
         return buildTokenResponse(adminUser);
     }
 
     private TokenPairResponse processOAuthFlow(String code, String codeVerifier) {
-        log.info("Processing OAuth flow with code: {} and verifier present: {}",
-                code != null ? code.substring(0, Math.min(8, code.length())) + "..." : "null",
-                codeVerifier != null);
-
+        log.info("Processing OAuth flow - verifier present: {}", codeVerifier != null);
         String githubToken = gitHubOAuthService.exchangeCodeForToken(code, codeVerifier);
-        log.info("GitHub token exchange complete - token present: {}", githubToken != null);
-
         GitHubDtos.GitHubUser githubUser = gitHubOAuthService.fetchGitHubUser(githubToken);
-        log.info("GitHub user fetched: {}", githubUser != null ? githubUser.login() : "null");
-
         User user = gitHubOAuthService.upsertUser(githubUser);
-        log.info("User upserted: {} (active: {})", user.getUsername(), user.isActive());
 
         if (!user.isActive()) {
             throw new OAuthException("Account is inactive. Contact an administrator.");
@@ -100,12 +79,8 @@ public class GitHubAuthController {
             @RequestParam(required = false) String state,
             @RequestParam(required = false) String cliCallback
     ) {
-        log.info("========================================");
-        log.info("INITIATE OAuth CALLED");
-        log.info("codeChallenge present: {}", codeChallenge != null);
-        log.info("state present: {}", state != null);
-        log.info("cliCallback present: {}", cliCallback != null);
-        log.info("========================================");
+        log.info("INITIATE OAuth CALLED - codeChallenge: {}, state: {}, cliCallback: {}",
+                codeChallenge != null, state != null, cliCallback != null);
 
         boolean isCli = codeChallenge != null && !codeChallenge.isBlank();
 
@@ -118,31 +93,20 @@ public class GitHubAuthController {
             oauthState = (state != null && !state.isBlank()) ? state : PkceUtils.generateState();
             challengeToSend = codeChallenge;
             verifierToStore = "CLI_MANAGED";
-            log.info("CLI State generated/used: {}", oauthState);
         } else {
             log.info("=== BROWSER FLOW ===");
             oauthState = PkceUtils.generateState();
             verifierToStore = PkceUtils.generateCodeVerifier();
             challengeToSend = PkceUtils.deriveCodeChallenge(verifierToStore);
-
-            log.info("Browser State generated: {}", oauthState);
-            log.info("Browser Challenge generated: {}", challengeToSend);
-            log.info("Browser Verifier generated: {}", verifierToStore);
         }
 
-        log.info("Storing state in OAuthStateStore with key: {}", oauthState);
-        stateStore.put(oauthState, verifierToStore);
+        // Store state with cliCallbackUrl (null for browser flow)
+        stateStore.put(oauthState, verifierToStore, isCli ? cliCallback : null);
 
-        // Verify storage
-        log.info("Verifying state was stored - Store contains '{}': {}", oauthState, stateStore.contains(oauthState));
-        log.info("Current store size: {}", stateStore.size());
-
-        // CLI uses its own local callback URL; browser uses the backend's registered redirect URI
+        // CLI uses its own local callback; browser uses backend's registered redirect URI
         String redirectUri = (isCli && cliCallback != null && !cliCallback.isBlank())
                 ? cliCallback
                 : props.getRedirectUri();
-
-        log.info("Redirect URI being used: {}", redirectUri);
 
         String authorizeUrl = UriComponentsBuilder
                 .fromHttpUrl(GitHubOAuthProperties.AUTHORIZE_URL)
@@ -156,15 +120,12 @@ public class GitHubAuthController {
                 .build()
                 .toUriString();
 
-        log.info("Built authorize URL: {}", authorizeUrl);
+        log.info("Built authorize URL for {} flow", isCli ? "CLI" : "browser");
 
         if (isCli) {
-            log.info("Returning JSON response for CLI flow");
             return ResponseEntity.ok(new GitHubDtos.InitiateResponse(authorizeUrl, oauthState));
         }
 
-        // Browser flow: return authorize URL as JSON
-        log.info("Returning JSON with authorize_url for browser flow");
         return ResponseEntity.ok(Map.of("authorize_url", authorizeUrl));
     }
 
@@ -172,36 +133,22 @@ public class GitHubAuthController {
     public ResponseEntity<TokenPairResponse> cliCallback(
             @RequestBody CliCallbackRequest req
     ) {
-        log.info("========================================");
-        log.info("CLI CALLBACK RECEIVED (POST)");
-        log.info("Code: {}", req.code() != null ? req.code().substring(0, Math.min(8, req.code().length())) + "..." : "null");
-        log.info("State: {}", req.state());
-        log.info("CodeVerifier present: {}", req.codeVerifier() != null);
-        log.info("isTestCode: {}", isTestCode(req.code()));
-        log.info("========================================");
+        log.info("CLI CALLBACK RECEIVED (POST) - state: {}, verifier present: {}",
+                req.state(), req.codeVerifier() != null);
 
         if (isTestCode(req.code())) {
             log.info("Handling test_code for CLI");
             return ResponseEntity.ok(handleTestCode());
         }
 
-        // ── Normal CLI flow
-        log.info("Consuming state from store: {}", req.state());
         OAuthStateStore.StateEntry entry = stateStore.consume(req.state())
                 .orElseThrow(() -> {
                     log.error("State not found or expired: {}", req.state());
-                    log.error("Current store size: {}", stateStore.size());
                     return new OAuthException("Invalid or expired OAuth state");
                 });
 
-        log.info("State consumed successfully. Entry codeVerifier: {}", entry.codeVerifier());
-
-        // For CLI flow the verifier comes from the request body, not the store
-        String codeVerifier = !"CLI_MANAGED".equals(entry.codeVerifier())
-                ? entry.codeVerifier()
-                : req.codeVerifier();
-
-        log.info("Using codeVerifier: {}", codeVerifier != null ? "present" : "null");
+        // CLI_MANAGED sentinel — use verifier from request body
+        String codeVerifier = entry.isCliFlow() ? req.codeVerifier() : entry.codeVerifier();
 
         TokenPairResponse tokens = processOAuthFlow(req.code(), codeVerifier);
         log.info("CLI OAuth flow completed successfully");
@@ -215,41 +162,39 @@ public class GitHubAuthController {
             @RequestParam(required = false) String error,
             HttpServletResponse response
     ) throws IOException {
-        log.info("========================================");
-        log.info("BROWSER CALLBACK RECEIVED (GET)");
-        log.info("Code: {}", code != null ? code.substring(0, Math.min(8, code.length())) + "..." : "null");
-        log.info("State: {}", state);
-        log.info("Error present: {}", error != null);
-        log.info("========================================");
+        log.info("BROWSER CALLBACK RECEIVED (GET) - state: {}, error: {}", state, error);
 
         if (error != null) {
             log.error("GitHub OAuth error: {}", error);
             throw new OAuthException("GitHub OAuth denied by user: " + error);
         }
 
-        log.info("Attempting to consume state from store: {}", state);
-        log.info("Current store size before consume: {}", stateStore.size());
-
         OAuthStateStore.StateEntry entry = stateStore.consume(state)
                 .orElseThrow(() -> {
                     log.error("State not found or expired: {}", state);
-                    log.error("Available states in store: {}", stateStore.getAllKeys());
                     return new OAuthException("Invalid or expired OAuth state");
                 });
 
-        log.info("State consumed successfully. CodeVerifier from store: {}", entry.codeVerifier());
+        // CLI flow — forward code+state to CLI's local server, don't exchange here
+        if (entry.isCliFlow()) {
+            String cliCallbackUrl = entry.cliCallbackUrl();
+            if (cliCallbackUrl == null || cliCallbackUrl.isBlank()) {
+                throw new OAuthException("CLI callback URL missing from state entry");
+            }
+            String redirectUrl = UriComponentsBuilder.fromHttpUrl(cliCallbackUrl)
+                    .queryParam("code", code)
+                    .queryParam("state", state)
+                    .build()
+                    .toUriString();
+            log.info("CLI flow — forwarding code to local server: {}", cliCallbackUrl);
+            response.sendRedirect(redirectUrl);
+            return;
+        }
 
+        // Browser flow — exchange code, set cookies, redirect to frontend
         TokenPairResponse tokens = processOAuthFlow(code, entry.codeVerifier());
-        log.info("OAuth flow completed successfully for user");
-
-        // Set HTTP-only cookies
-        log.info("Setting HTTP-only cookies");
+        log.info("Browser OAuth flow completed successfully");
         AuthController.setAuthCookies(response, tokens.accessToken(), tokens.refreshToken());
-
-        // Redirect to frontend callback page
-        String frontendUri = props.getFrontendUri();
-        log.info("Redirecting to frontend: {}", frontendUri);
-        response.sendRedirect(frontendUri);
-        log.info("Redirect sent");
+        response.sendRedirect(props.getFrontendUri());
     }
 }
