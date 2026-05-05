@@ -1,5 +1,6 @@
 package com.mouse.profiler.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mouse.profiler.dto.QueryCriteria;
 import lombok.RequiredArgsConstructor;
@@ -24,108 +25,74 @@ import java.util.Set;
 public class QueryInterpretationCacheService {
 
     private static final String KEY_PREFIX = "nlq:interpret:";
-    static final Duration TTL = Duration.ofHours(1);
+    private static final Duration DEFAULT_TTL = Duration.ofHours(1);
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
     /**
-     * Looks up a cached {@link QueryCriteria} for the given raw query string.
+     * Retrieves the interpreted criteria for a given raw query string.
      *
-     * @param rawQuery the trimmed, non-blank user query
-     * @return the cached criteria if present, or empty on miss or error
+     * @param rawQuery The unparsed user input.
+     * @return Optional containing the cached criteria, or empty if not found/invalid.
      */
     public Optional<QueryCriteria> get(String rawQuery) {
-        String key = toKey(rawQuery);
+        String key = buildKey(rawQuery);
         try {
             String json = redisTemplate.opsForValue().get(key);
-            if (json == null) {
-                log.debug("Interpretation cache miss for: [{}]", rawQuery);
-                return Optional.empty();
-            }
-            log.debug("Interpretation cache hit for: [{}]", rawQuery);
+            if (json == null) return Optional.empty();
+
             return Optional.of(objectMapper.readValue(json, QueryCriteria.class));
-        } catch (Exception e) {
-            log.warn("Interpretation cache read error for [{}]: {}", rawQuery, e.getMessage());
+        } catch (JsonProcessingException e) {
+            log.error("Failed to deserialize cached criteria for query: {}", rawQuery, e);
             return Optional.empty();
         }
     }
 
     /**
-     * Stores an interpreted {@link QueryCriteria} against the raw query string.
+     * Persists an interpreted query to the cache.
      *
-     * @param rawQuery the trimmed, non-blank user query
-     * @param criteria the successfully interpreted criteria
+     * @param rawQuery The original user input string.
+     * @param criteria The structured interpretation result.
      */
     public void put(String rawQuery, QueryCriteria criteria) {
-        String key = toKey(rawQuery);
+        String key = buildKey(rawQuery);
         try {
             String json = objectMapper.writeValueAsString(criteria);
-            redisTemplate.opsForValue().set(key, json, TTL);
-            log.debug("Interpretation cached for: [{}] (TTL={})", rawQuery, TTL);
-        } catch (Exception e) {
-            log.warn("Interpretation cache write error for [{}]: {}", rawQuery, e.getMessage());
+            redisTemplate.opsForValue().set(key, json, DEFAULT_TTL);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize criteria for query: {}", rawQuery, e);
         }
     }
 
     /**
-     * Evicts a single entry from the interpretation cache.
-     *
-     * @param rawQuery the raw query string to evict
+     * Removes a specific query interpretation from the cache.
      */
     public void evict(String rawQuery) {
-        String key = toKey(rawQuery);
-        try {
-            Boolean deleted = redisTemplate.delete(key);
-            if (Boolean.TRUE.equals(deleted)) {
-                log.debug("Interpretation cache evicted: [{}]", rawQuery);
-            }
-        } catch (Exception e) {
-            log.warn("Interpretation cache evict error for [{}]: {}", rawQuery, e.getMessage());
-        }
+        redisTemplate.delete(buildKey(rawQuery));
     }
 
     /**
-     * Evicts all interpretation cache entries.
-     *
-     * <p>This is useful for testing or when the interpretation logic has changed.
-     * Under normal operation, interpretation cache entries expire naturally after 1 hour.
+     * Flushes all cached NLQ interpretations.
+     * Generally used during system maintenance or algorithm updates.
      */
     public void evictAll() {
-        try {
-            Set<String> keys = redisTemplate.keys(KEY_PREFIX + "*");
-            if (keys != null && !keys.isEmpty()) {
-                Long deleted = redisTemplate.delete(keys);
-                log.info("Interpretation cache evicted {} entries", deleted);
-            } else {
-                log.debug("Interpretation cache is empty, nothing to evict");
-            }
-        } catch (Exception e) {
-            log.warn("Interpretation cache evictAll error: {}", e.getMessage());
+        Set<String> keys = redisTemplate.keys(KEY_PREFIX + "*");
+        if (keys != null && !keys.isEmpty()) {
+            redisTemplate.delete(keys);
+            log.info("Evicted {} entries from interpretation cache.", keys.size());
         }
     }
 
     /**
-     * Returns the approximate size of the interpretation cache.
-     * Useful for monitoring and debugging.
-     *
-     * @return number of cached interpretation entries
+     * Returns the total count of cached interpretations.
      */
     public long size() {
-        try {
-            Set<String> keys = redisTemplate.keys(KEY_PREFIX + "*");
-            return keys.isEmpty() ?  0: keys.size();
-        } catch (Exception e) {
-            log.warn("Interpretation cache size check error: {}", e.getMessage());
-            return 0;
-        }
+        Set<String> keys = redisTemplate.keys(KEY_PREFIX + "*");
+        return keys != null ? keys.size() : 0;
     }
 
-    /**
-     * Produces a stable Redis key from the raw query.
-     * Lowercase + trim ensures "Nigeria Males" and "nigeria males" share an entry.
-     */
-    private String toKey(String rawQuery) {
+    private String buildKey(String rawQuery) {
         return KEY_PREFIX + rawQuery.toLowerCase().trim();
     }
 }
