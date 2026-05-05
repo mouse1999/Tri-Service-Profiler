@@ -5,8 +5,11 @@ import com.mouse.profiler.entity.Profile;
 import com.mouse.profiler.exception.InvalidInputException;
 import com.mouse.profiler.exception.InvalidQueryException;
 import com.mouse.profiler.manager.ProfileManager;
+import com.mouse.profiler.service.CsvIngestionService;
+import com.mouse.profiler.service.JobStatusService;
 import com.mouse.profiler.utils.CsvExportUtil;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -15,10 +18,15 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+
+import static reactor.netty.http.HttpConnectionLiveness.log;
 
 @RestController
 @RequestMapping("/api/profiles")
@@ -27,6 +35,13 @@ public class ProfileController {
 
     private final ProfileManager profileManager;
     private final CsvExportUtil csvExportUtil;
+
+    private final CsvIngestionService csvIngestionService;
+
+    private final JobStatusService jobStatusService;
+
+    @Qualifier("csvIngestionExecutor")
+    private final Executor csvIngestionExecutor;
 
     @PostMapping
     public ResponseEntity<ProfileResponseDto> createProfile(@RequestBody Map<String, String> request) {
@@ -183,8 +198,101 @@ public class ProfileController {
         return ResponseEntity
                 .ok()
                 .contentType(MediaType.parseMediaType("text/csv"))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + filename + "\"")
                 .body(csvData);
+    }
+
+
+
+    /**
+     * Uploads a CSV file for batch profile ingestion - ASYNCHRONOUS with Redis.
+     *
+     * @param file CSV file (max 500k rows)
+     * @return job ID for status tracking
+     */
+    @PostMapping("/upload")
+    public ResponseEntity<Map<String, String>> uploadProfiles(
+            @RequestParam("file") MultipartFile file) {
+
+        // Validate file
+        if (file == null || file.isEmpty()) {
+            throw new InvalidInputException("File is empty or missing");
+        }
+
+        String filename = file.getOriginalFilename();
+        if (filename == null || !filename.toLowerCase().endsWith(".csv")) {
+            throw new InvalidInputException("Only CSV files are accepted");
+        }
+
+        if (file.getSize() > 100 * 1024 * 1024) { // 100MB limit
+            throw new InvalidInputException("File size exceeds maximum allowed (100MB)");
+        }
+
+        // Generate unique job ID
+        String jobId = UUID.randomUUID().toString();
+        log.info("Async CSV upload started - jobId: {}, filename: {}, size: {} bytes",
+                jobId, filename, file.getSize());
+
+        // Store initial processing status in Redis
+        jobStatusService.createJob(jobId);
+
+        // Process asynchronously
+        CompletableFuture.supplyAsync(() -> csvIngestionService.ingest(file),
+                        csvIngestionExecutor)
+                .thenAccept(result -> {
+                    jobStatusService.completeJob(jobId, result);
+                    log.info("Async CSV upload completed - jobId: {}, inserted: {}, skipped: {}",
+                            jobId, result.getInserted(), result.getSkipped());
+                })
+                .exceptionally(throwable -> {
+                    log.error("Async CSV upload failed - jobId: {}, error: {}", jobId, throwable.getMessage());
+                    jobStatusService.failJob(jobId, throwable.getMessage());
+                    return null;
+                });
+
+        // Return immediately with job ID
+        return ResponseEntity.accepted().body(Map.of(
+                "status", "accepted",
+                "jobId", jobId,
+                "message", "Upload accepted."
+        ));
+    }
+
+    /**
+     * Gets the status of an async CSV upload job from Redis.
+     *
+     * @param jobId the job ID from upload endpoint
+     * @return status and result if completed
+     */
+    @GetMapping("/upload/{jobId}/status")
+    public ResponseEntity<?> getUploadStatus(@PathVariable String jobId) {
+        JobStatus jobStatus = jobStatusService.getJobStatus(jobId);
+
+        if (jobStatus == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("status", "error", "message", "Job not found"));
+        }
+
+        if ("processing".equals(jobStatus.getStatus())) {
+            return ResponseEntity.ok(Map.of(
+                    "status", "processing",
+                    "jobId", jobId,
+                    "message", "Upload is processing. Please check back later."
+            ));
+        }
+
+        if ("failed".equals(jobStatus.getStatus())) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "status", "error",
+                            "jobId", jobId,
+                            "message", "Upload failed"
+                    ));
+        }
+
+        // Return the actual ingestion result
+        return ResponseEntity.ok(jobStatus.getResult());
     }
 
 
