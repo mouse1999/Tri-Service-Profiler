@@ -5,15 +5,13 @@ import com.mouse.profiler.entity.Profile;
 import com.mouse.profiler.exception.ApiException;
 import com.mouse.profiler.exception.ProfileAlreadyExistsException;
 import com.mouse.profiler.exception.ProfileNotFoundException;
-import com.mouse.profiler.nlp.QueryInterpreter;
+import com.mouse.profiler.interfaces.NlqInterpreter;
+import com.mouse.profiler.nlp.QueryNormalizer;
 import com.mouse.profiler.repository.ProfileManagerRepository;
-import com.mouse.profiler.service.AgeService;
-import com.mouse.profiler.service.GenderService;
-import com.mouse.profiler.service.NationalizeService;
+import com.mouse.profiler.service.*;
 import com.mouse.profiler.utils.ProfileSpecification;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j; // Lombok Logger
-import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -21,15 +19,19 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
-@Slf4j // 1. Add this annotation
+/**
+ * Service orchestrator for managing user profiles.
+ * Handles profile lifecycle, external data enrichment via asynchronous API calls,
+ * and multi-layered caching for Natural Language Queries (NLQ).
+ */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProfileManager {
@@ -37,129 +39,161 @@ public class ProfileManager {
     private final GenderService genderService;
     private final AgeService ageService;
     private final NationalizeService nationalizeService;
-    private final ProfileManagerRepository managerRepository;
-    private final QueryInterpreter interpreter;
+    private final ProfileManagerRepository repository;
 
+    private final NlqInterpreter nlqInterpreter;
+    private final QueryNormalizer normalizer;
+    private final QueryCacheService queryCache;
+    private final QueryInterpretationCacheService interpretationCache;
+
+    /**
+     * Creates a new profile with enriched data from external providers.
+     * Data is fetched in parallel to minimize response latency.
+     *
+     * @param name Name to profile; normalized to lowercase.
+     * @return DTO representation of the persisted profile.
+     * @throws ProfileAlreadyExistsException if the name is already registered.
+     */
     @Transactional
     public ProfileDto createProfile(String name) {
-        String nameLowerCase = name.toLowerCase().trim();
-        log.info("Manager: Starting profile creation workflow for name: [{}]", nameLowerCase);
+        String normalizedName = name.toLowerCase().trim();
+        log.info("Attempting to create profile for: {}", normalizedName);
 
-        // 1. Idempotency Check
-        Optional<Profile> existing = managerRepository.findByName(nameLowerCase);
-        if (existing.isPresent()) {
-            log.info("Manager: Profile already exists for name: [{}]. Returning cached data.", nameLowerCase);
-            throw new ProfileAlreadyExistsException(ProfileDto.fromEntity(existing.get()));
-        }
+        repository.findByName(normalizedName).ifPresent(p -> {
+            throw new ProfileAlreadyExistsException(ProfileDto.fromEntity(p));
+        });
 
-        log.debug("Manager: Initiating parallel API calls for [{}]", nameLowerCase);
+        Profile profile = fetchEnrichedData(normalizedName);
+        Profile saved = repository.save(profile);
 
-        CompletableFuture<GenderResponseDto> genderFuture =
-                CompletableFuture.supplyAsync(() -> genderService.fetchGenderData(nameLowerCase));
+        // Invalidate query results as the dataset has changed
+        queryCache.evictAll();
 
-        CompletableFuture<AgeResponseDto> ageFuture =
-                CompletableFuture.supplyAsync(() -> ageService.fetchAgeData(nameLowerCase));
+        log.info("Successfully created profile with ID: {}", saved.getId());
+        return ProfileDto.fromEntity(saved);
+    }
 
-        CompletableFuture<NationalityResponseDto> nationalizeFuture =
-                CompletableFuture.supplyAsync(() -> nationalizeService.fetchNationalityData(nameLowerCase));
+    /**
+     * Orchestrates parallel calls to Agify, Genderize, and Nationalize.
+     */
+    private Profile fetchEnrichedData(String name) {
+        var genderFuture = CompletableFuture.supplyAsync(() -> genderService.fetchGenderData(name));
+        var ageFuture = CompletableFuture.supplyAsync(() -> ageService.fetchAgeData(name));
+        var natFuture = CompletableFuture.supplyAsync(() -> nationalizeService.fetchNationalityData(name));
 
         try {
-            // Wait for all tasks to complete
-            CompletableFuture.allOf(genderFuture, ageFuture, nationalizeFuture).join();
-            log.debug("Manager: All parallel API calls completed successfully for [{}]", nameLowerCase);
+            CompletableFuture.allOf(genderFuture, ageFuture, natFuture).join();
 
-            // 3. Extract results
-            GenderResponseDto genderData = genderFuture.join();
-            AgeResponseDto ageData = ageFuture.join();
-            NationalityResponseDto natData = nationalizeFuture.join();
+            var gender = genderFuture.join();
+            var age = ageFuture.join();
+            var nat = natFuture.join();
 
-            Profile profile = Profile.builder()
-                    .name(nameLowerCase)
-                    .gender(genderData.gender())
-                    .genderProbability((float) genderData.genderProbability())
-//                    .sampleSize(genderData.sampleSize())
-                    .age(ageData.age())
-                    .ageGroup(ageData.ageCategory().getLabel())
-                    .countryId(natData.countryProbability().countryId())
-                    .countryProbability((float) natData.countryProbability().probability())
-                    .createdAt(ZonedDateTime.now(ZoneOffset.UTC).toOffsetDateTime())
+            return Profile.builder()
+                    .name(name)
+                    .gender(gender.gender())
+                    .genderProbability((float) gender.genderProbability())
+                    .age(age.age())
+                    .ageGroup(age.ageCategory().getLabel())
+                    .countryId(nat.countryProbability().countryId())
+                    .countryProbability((float) nat.countryProbability().probability())
+                    .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                     .build();
 
-            Profile savedProfile = managerRepository.save(profile);
-            log.info("Manager: Profile successfully created and saved with ID: {}", savedProfile.getId());
-
-            return ProfileDto.fromEntity(savedProfile);
-
         } catch (CompletionException e) {
-            log.error("Manager: One or more parallel tasks failed for name [{}]: {}", nameLowerCase, e.getMessage());
-            Throwable cause = e.getCause();
-
-            if (cause instanceof ApiException runtimeException) {
-                throw runtimeException;
-            }
-
-            throw new ApiException(cause != null ? cause.getMessage() : "Unknown error");
+            log.error("Failed to enrich profile data for {}: {}", name, e.getMessage());
+            if (e.getCause() instanceof ApiException apiEx) throw apiEx;
+            throw new ApiException("Critical error during external data enrichment");
         }
     }
 
-    public List<Profile> getAllProfiles(String gender, String countryId, String ageGroup) {
-        log.info("Manager: Fetching all profiles with filters - Gender: {}, Country: {}, AgeGroup: {}",
-                gender, countryId, ageGroup);
-
-        String g = (gender != null && !gender.isBlank()) ? gender.toLowerCase() : null;
-        String c = (countryId != null && !countryId.isBlank()) ? countryId.toUpperCase() : null;
-        String a = (ageGroup != null && !ageGroup.isBlank()) ? ageGroup.toLowerCase() : null;
-
-        List<Profile> profiles = managerRepository.findWithFilters(g, c, a);
-        log.debug("Manager: Found {} profiles matching filters", profiles.size());
-        return profiles;
-    }
-
-    public Profile getProfile(UUID id) {
-        log.info("Manager: Fetching profile with ID: {}", id);
-        return managerRepository.findById(id)
-                .orElseThrow(() -> {
-                    log.warn("Manager: Profile not found for ID: {}", id);
-                    return new ProfileNotFoundException("Profile not found");
-                });
-    }
-
-    @Transactional
-    public void deleteProfile(UUID id) {
-        log.info("Manager: Attempting to delete profile with ID: {}", id);
-        if (!managerRepository.existsById(id)) {
-            log.warn("Manager: Delete failed. Profile not found for ID: {}", id);
-            throw new ProfileNotFoundException("Profile not found");
-        }
-        managerRepository.deleteById(id);
-        log.info("Manager: Successfully deleted profile with ID: {}", id);
-    }
-
-
+    /**
+     * Resolves a Natural Language Query into structured criteria.
+     * Utilizes Layer-1 caching for query interpretations.
+     */
     public NewProfileResponseDto<Profile> searchWithNLQ(String queryText, Pageable pageable) {
-        QueryCriteria criteria = interpreter.interpret(queryText);
+        log.debug("Processing NLQ search: '{}'", queryText);
+
+        QueryCriteria criteria = interpretationCache.get(queryText)
+                .orElseGet(() -> {
+                    QueryCriteria interpreted = nlqInterpreter.interpret(queryText);
+                    interpretationCache.put(queryText, interpreted);
+                    return interpreted;
+                });
+
         return executeSearch(criteria, pageable);
     }
 
+    /**
+     * Performs a paginated search using structured criteria.
+     * Utilizes Layer-2 caching for result sets.
+     */
     public NewProfileResponseDto<Profile> searchWithCriteria(QueryCriteria criteria, Pageable pageable) {
         return executeSearch(criteria, pageable);
     }
 
     private NewProfileResponseDto<Profile> executeSearch(QueryCriteria criteria, Pageable pageable) {
-        Specification<Profile> spec = ProfileSpecification.build(criteria);
-        Page<Profile> resultPage = managerRepository.findAll(spec, pageable);
+        String cacheKey = generateCacheKey(criteria, pageable);
 
-        return NewProfileResponseDto.success(
-                resultPage.getContent(),
-                resultPage.getNumber() + 1,
-                resultPage.getSize(),
-                resultPage.getTotalElements(),
-                "/api/profiles"
+        return queryCache.get(cacheKey).orElseGet(() -> {
+            log.debug("Cache miss for query. Fetching from database...");
+
+            Specification<Profile> spec = ProfileSpecification.build(criteria);
+            Page<Profile> page = repository.findAll(spec, pageable);
+
+            NewProfileResponseDto<Profile> response = NewProfileResponseDto.success(
+                    page.getContent(),
+                    page.getNumber() + 1,
+                    page.getSize(),
+                    page.getTotalElements(),
+                    "/api/profiles"
+            );
+
+            queryCache.put(cacheKey, response);
+            return response;
+        });
+    }
+
+    private String generateCacheKey(QueryCriteria criteria, Pageable pageable) {
+        String base = normalizer.toCacheKey(criteria);
+        Sort.Order order = pageable.getSort().iterator().hasNext()
+                ? pageable.getSort().iterator().next()
+                : Sort.Order.desc("createdAt");
+
+        return normalizer.withPagination(
+                base,
+                pageable.getPageNumber() + 1,
+                pageable.getPageSize(),
+                order.getProperty(),
+                order.getDirection().name().toLowerCase()
         );
     }
 
+    /**
+     * Fetches all records matching criteria without pagination for export purposes.
+     */
     public List<Profile> getAllProfilesForExport(QueryCriteria criteria, Sort sort) {
-        Specification<Profile> spec = ProfileSpecification.build(criteria);
-        return managerRepository.findAll(spec, sort);
+        if (criteria != null) criteria.validate();
+        return repository.findAll(ProfileSpecification.build(criteria), sort);
+    }
+
+    @Transactional
+    public void deleteProfile(UUID id) {
+        if (!repository.existsById(id)) {
+            throw new ProfileNotFoundException("No profile found for ID: " + id);
+        }
+        repository.deleteById(id);
+        queryCache.evictAll();
+        log.info("Profile {} deleted and result cache invalidated.", id);
+    }
+
+    public Profile getProfile(UUID id) {
+        return repository.findById(id)
+                .orElseThrow(() -> new ProfileNotFoundException("Profile not found: " + id));
+    }
+
+    public void evictAllCaches() {
+        log.warn("Manual global cache eviction triggered.");
+        queryCache.evictAll();
+        interpretationCache.evictAll();
     }
 }
