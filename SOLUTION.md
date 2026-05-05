@@ -14,10 +14,10 @@ This document details the implementation decisions, trade-offs, and performance 
 ### Sequence Diagram: Query Flow with Two-Layer Cache
 
 
-![Insighta Labs Query Fow](./images/Query_Flow.png)
+![Insighta Labs Query Fow](./design/Query_Flow.png)
 
 ### Sequence Diagram: CSV Ingestion Flow
-![Insighta Labs Csv Flow](./images/Csv_Flow.png)
+![Insighta Labs Csv Flow](./design/Csv_Flow.png)
 
 ---
 
