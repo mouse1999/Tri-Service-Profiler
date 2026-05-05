@@ -17,13 +17,8 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "profiles", indexes = {
-        // Unique index for the name check during data seeding
         @Index(name = "idx_profile_name", columnList = "name", unique = true),
-
-        // Composite index for common filtering (Gender + Country + Age Group)
         @Index(name = "idx_profile_lookup", columnList = "gender, country_id, age_group"),
-
-        // Separate index for range-based age filtering (min_age / max_age)
         @Index(name = "idx_profile_age", columnList = "age")
 })
 @Getter
@@ -40,29 +35,28 @@ public class Profile {
     @Column(nullable = false, unique = true)
     private String name;
 
-    @Column(nullable = false)
+    // Optional fields - can be null
     private String gender;
 
-    @Column(name = "gender_probability", nullable = false)
+    @Column(name = "gender_probability")
     @JsonProperty("gender_probability")
     private Float genderProbability;
 
-    @Column(nullable = false)
     private Integer age;
 
-    @Column(name = "age_group", nullable = false)
+    @Column(name = "age_group")
     @JsonProperty("age_group")
-    private String ageGroup; // child, teenager, adult, senior
+    private String ageGroup;
 
-    @Column(name = "country_id", length = 2, nullable = false)
+    @Column(name = "country_id", length = 2)
     @JsonProperty("country_id")
-    private String countryId; // ISO code (e.g., NG, AU)
+    private String countryId;
 
-    @Column(name = "country_name", nullable = false)
+    @Column(name = "country_name")
     @JsonProperty("country_name")
     private String countryName;
 
-    @Column(name = "country_probability", nullable = false)
+    @Column(name = "country_probability")
     @JsonProperty("country_probability")
     private Float countryProbability;
 
@@ -70,10 +64,6 @@ public class Profile {
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    /**
-     * sampleSize is kept for compatibility with legacy logic
-     * but is not persisted in the database.
-     */
     @Transient
     private Integer sampleSize;
 
