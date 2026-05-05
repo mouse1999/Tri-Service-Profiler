@@ -238,7 +238,6 @@ At 500 NLQ requests per minute where 90% are cached, effective cost is $0.
 |----------|--------|-------------|
 | `POST /api/profiles/upload` | Upload | Returns job ID immediately |
 | `GET /api/profiles/upload/{jobId}/status` | Poll | Returns status and result when complete |
-| `GET /api/profiles/upload/jobs` | List | Lists all active jobs (admin only) |
 
 ### Memory Usage Analysis
 
@@ -296,5 +295,3 @@ At 500 NLQ requests per minute where 90% are cached, effective cost is $0.
 
 ---
 
-
-*End of Stage 4B Solution Document*
