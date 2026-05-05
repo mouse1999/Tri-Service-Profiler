@@ -129,35 +129,6 @@ COUNTRY_MAP: "nigeria" → "NG", "united states" → "US"
 
 ## Part 3: Natural Language Query — Rule-Based Parser
 
-### Architecture
-
-```
-Raw NLQ string
-      │
-      ▼
-[Layer 1 — QueryInterpretationCacheService, TTL 1hr]
-      │ hit → return QueryCriteria immediately
-      │ miss
-      ▼
-RegexNlqInterpreter
-      ├─ Keyword maps (gender, age group, country)
-      ├─ Regex patterns (age ranges, comparisons)
-      └─ Special rules ("young" → 18-35)
-      │
-      ├─ match → QueryCriteria
-      └─ no match → InvalidQueryException (400 to client)
-      │
-      ▼
-[Layer 1 write — TTL 1hr]
-      │
-      ▼
-QueryNormalizer → canonical key
-      │
-      ▼
-[Layer 2 — QueryCacheService, TTL 5min]
-      │ miss → PostgreSQL with indexes
-```
-
 ### Why Rule-Based Only
 
 | Aspect | Justification |
