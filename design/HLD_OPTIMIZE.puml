@@ -1,0 +1,105 @@
+@startuml
+!theme plain
+skinparam componentStyle rectangle
+skinparam backgroundColor #FEFEFE
+
+title Insighta Labs+ Stage 4B - Optimized Architecture
+
+actor "CLI User" as CLI
+actor "Web User" as Web
+actor "Admin User" as Admin
+
+node "Client Layer" {
+    [CLI Tool] as CLITool
+    [Web Portal] as WebPortal
+}
+
+node "Application Layer (Railway)" {
+
+    rectangle "API Gateway" as APIG {
+        [Rate Limiting Filter] as RLF
+        [JWT Authentication Filter] as JAF
+        [API Version Interceptor] as AVI
+    }
+
+    rectangle "Controller Layer" {
+        [ProfileController]
+        [AuthController]
+    }
+
+    rectangle "Manager Layer" {
+        [ProfileManager]
+        [CsvIngestionService]
+    }
+
+    rectangle "Cache Layer" {
+        [QueryInterpretationCacheService\n(Layer 1 - TTL 1hr)] as QICS
+        [QueryCacheService\n(Layer 2 - TTL 5min)] as QCS
+    }
+
+    rectangle "NLP Layer" {
+        [RegexNlqInterpreter]
+        [QueryNormalizer]
+    }
+
+    rectangle "Thread Pools" {
+        [HTTP Worker Threads]
+        [CSV Ingestion Executor\n(2 threads, queue 10)] as CIE
+    }
+}
+
+database "Redis (Railway)" as Redis {
+    [Layer 1: nlq:interpret:*]
+    [Layer 2: profiles:query:*]
+    [Rate Limit Buckets]
+}
+
+database "PostgreSQL (Railway)" as PG {
+    [profiles table\nwith indexes]
+}
+
+CLI --> CLITool
+Web --> WebPortal
+Admin --> WebPortal
+
+CLITool --> APIG
+WebPortal --> APIG
+
+RLF --> JAF
+JAF --> AVI
+AVI --> ProfileController
+AVI --> AuthController
+
+ProfileController --> ProfileManager
+ProfileController --> CsvIngestionService
+
+ProfileManager --> QICS
+ProfileManager --> QCS
+ProfileManager --> RegexNlqInterpreter
+ProfileManager --> QueryNormalizer
+
+QICS --> Redis
+QCS --> Redis
+ProfileManager --> PG
+
+CsvIngestionService --> CIE
+CsvIngestionService --> PG
+
+note right of QICS
+  Layer 1 Cache: Raw NLQ string → QueryCriteria
+  TTL: 1 hour
+  Prevents repeated parsing cost
+end note
+
+note right of QCS
+  Layer 2 Cache: Canonical query → Result page
+  TTL: 5 minutes
+  Eliminates repeated DB queries
+end note
+
+note bottom of CIE
+  Dedicated thread pool isolates
+  upload I/O from HTTP workers
+end note
+
+@enduml

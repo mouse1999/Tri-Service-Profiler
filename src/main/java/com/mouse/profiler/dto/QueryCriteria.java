@@ -9,14 +9,20 @@ import lombok.Data;
  */
 @Data
 public class QueryCriteria {
+
     private String gender;
     private String age_group;
     private Integer min_age;
     private Integer max_age;
     private String country_id;
+    private String name;
 
     private Float min_gender_probability;
     private Float min_country_probability;
+
+    private String sort_by;
+    private String order;
+
 
     public void validate() {
         // 1. Gender Validation
@@ -49,6 +55,35 @@ public class QueryCriteria {
         // 4. Probability Validation (0.0 to 1.0)
         validateProbability(min_gender_probability, "min_gender_probability");
         validateProbability(min_country_probability, "min_country_probability");
+
+        // 5. Sort Field Validation
+        if (sort_by != null && !sort_by.isBlank()) {
+            String[] allowedSortFields = {
+                    "age", "created_at", "createdAt", "name", "gender",
+                    "country_id", "countryId", "gender_probability",
+                    "genderProbability", "country_probability", "countryProbability",
+                    "age_group", "ageGroup"
+            };
+
+            boolean isValid = false;
+            for (String allowed : allowedSortFields) {
+                if (allowed.equalsIgnoreCase(sort_by)) {
+                    isValid = true;
+                    break;
+                }
+            }
+
+            if (!isValid) {
+                throw new InvalidQueryException("Invalid query parameter");
+            }
+        }
+
+        // 6. Order Validation
+        if (order != null && !order.isBlank()) {
+            if (!order.equalsIgnoreCase("asc") && !order.equalsIgnoreCase("desc")) {
+                throw new InvalidQueryException("Invalid query parameter");
+            }
+        }
     }
 
     private void validateProbability(Float val, String name) {

@@ -1,0 +1,91 @@
+@startuml
+!theme plain
+skinparam sequenceMessageAlign center
+
+title CSV Ingestion Flow - Async Processing
+
+actor Admin as admin
+participant "ProfileController" as controller
+participant "ThreadPoolExecutor" as executor
+participant "CsvIngestionService" as service
+database "PostgreSQL" as db
+participant "JobStatusService" as jobs
+
+== Async Upload Initiation ==
+
+admin -> controller: POST /api/profiles/upload (file)
+activate controller
+
+controller -> controller: Validate file (.csv, size)
+controller -> jobs: createJob(jobId)
+activate jobs
+jobs -> jobs: Store "processing" status
+deactivate jobs
+
+controller -> executor: submit(() -> service.ingest(file))
+activate executor
+note right: Returns immediately, non-blocking
+
+controller --> admin: 202 Accepted {jobId}
+deactivate controller
+
+== Background Processing ==
+
+executor -> service: ingest(file)
+activate service
+
+service -> service: BufferedReader (streaming)
+note right: Reads line by line - O(1) memory
+
+loop For each row
+    service -> service: validateRow()
+
+    alt Invalid Row
+        service -> service: increment skip reason
+    else Valid Row
+        service -> service: add to batch
+    end
+
+    alt Batch Size >= 500
+        service -> db: batchUpdate with ON CONFLICT
+        activate db
+        db --> service: update counts
+        deactivate db
+        service -> service: clear batch
+    end
+end
+
+service -> db: flush remaining batch
+activate db
+db --> service: final counts
+deactivate db
+
+service -> jobs: completeJob(jobId, result)
+activate jobs
+jobs -> jobs: Store "completed" + result
+deactivate jobs
+
+service --> executor: CsvIngestionResult
+deactivate service
+deactivate executor
+
+== Status Polling ==
+
+admin -> controller: GET /api/profiles/upload/{jobId}/status
+activate controller
+
+controller -> jobs: getJobStatus(jobId)
+activate jobs
+jobs --> controller: JobStatus
+
+alt Status = "processing"
+    controller --> admin: 200 {status: "processing"}
+else Status = "completed"
+    controller --> admin: 200 {result}
+else Status = "failed"
+    controller --> admin: 500 {error}
+end
+
+deactivate controller
+
+@enduml

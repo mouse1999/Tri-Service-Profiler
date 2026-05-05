@@ -1,0 +1,91 @@
+@startuml
+!theme plain
+skinparam sequenceMessageAlign center
+
+title Query Flow - Two-Layer Cache Architecture
+
+actor User as user
+participant "ProfileController" as controller
+participant "ProfileManager" as manager
+participant "QueryInterpretationCacheService\n(Layer 1)" as layer1
+participant "RegexNlqInterpreter" as parser
+participant "QueryNormalizer" as normalizer
+participant "QueryCacheService\n(Layer 2)" as layer2
+database "PostgreSQL" as db
+database "Redis" as redis
+
+== Natural Language Query Processing ==
+
+user -> controller: GET /api/profiles/search?q=young males from nigeria
+activate controller
+
+controller -> manager: searchWithNLQ(query, pageable)
+activate manager
+
+manager -> layer1: get(rawQuery)
+activate layer1
+layer1 -> redis: GET nlq:interpret:young males from nigeria
+
+alt Cache Hit
+    redis --> layer1: QueryCriteria
+    layer1 --> manager: cached criteria
+    note right: Layer 1 Hit - No parsing needed
+
+else Cache Miss
+    layer1 --> manager: empty
+    deactivate layer1
+
+    manager -> parser: interpret(query)
+    activate parser
+    parser -> parser: Apply keyword maps & regex
+    parser --> manager: QueryCriteria
+    deactivate parser
+
+    manager -> layer1: put(rawQuery, criteria)
+    activate layer1
+    layer1 -> redis: SET nlq:interpret:... TTL 3600
+    deactivate layer1
+end
+
+manager -> normalizer: toCacheKey(criteria)
+activate normalizer
+normalizer -> normalizer: Normalize field order & values
+normalizer --> manager: baseKey
+deactivate normalizer
+
+manager -> normalizer: withPagination(baseKey, page, limit, sort, order)
+activate normalizer
+normalizer --> manager: fullCacheKey
+deactivate normalizer
+
+manager -> layer2: get(fullCacheKey)
+activate layer2
+layer2 -> redis: GET profiles:query:...
+
+alt Cache Hit
+    redis --> layer2: JSON result
+    layer2 --> manager: cached response
+    note right: Layer 2 Hit - No database call
+
+else Cache Miss
+    layer2 --> manager: empty
+    deactivate layer2
+
+    manager -> db: JPA Specification with indexes
+    activate db
+    db --> manager: Page<Profile>
+    deactivate db
+
+    manager -> layer2: put(fullCacheKey, response)
+    activate layer2
+    layer2 -> redis: SET ... TTL 300
+    deactivate layer2
+end
+
+manager --> controller: NewProfileResponseDto
+deactivate manager
+
+controller --> user: 200 OK with paginated results
+deactivate controller
+
+@enduml

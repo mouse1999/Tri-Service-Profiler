@@ -59,7 +59,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/profiles/export").hasAnyRole("ADMIN", "ANALYST")
                         .requestMatchers(HttpMethod.GET, "/api/profiles/{id}").hasAnyRole("ADMIN", "ANALYST")
                         .requestMatchers(HttpMethod.GET, "/api/profiles/all").hasAnyRole("ADMIN", "ANALYST")
+                        .requestMatchers(HttpMethod.POST, "/api/profiles/upload/**").hasAnyRole("ADMIN", "ANALYST")
                         .anyRequest().authenticated()
+
                 )
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
