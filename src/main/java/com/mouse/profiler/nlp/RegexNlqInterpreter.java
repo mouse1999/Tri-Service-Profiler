@@ -213,12 +213,4 @@ public class RegexNlqInterpreter implements NlqInterpreter {
                 criteria.getMax_age() == null && criteria.getCountry_id() == null;
     }
 
-    public boolean canInterpret(String query) {
-        try {
-            interpret(query);
-            return true;
-        } catch (InvalidQueryException e) {
-            return false;
-        }
-    }
 }

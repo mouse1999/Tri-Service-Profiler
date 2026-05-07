@@ -22,14 +22,16 @@ public class QueryNormalizer {
      * to standard system constants defined in {@link QueryConstants}.
      */
     public QueryCriteria normalize(QueryCriteria original) {
-        if (original == null) return new QueryCriteria();
+        if (original == null)
+            return new QueryCriteria();
 
         QueryCriteria normalized = new QueryCriteria();
 
         // Normalize Gender
         if (isPresent(original.getGender())) {
             String val = original.getGender().toLowerCase().trim();
-            normalized.setGender(QueryConstants.GENDER_MAP.getOrDefault(val, val));
+            normalized.setGender(QueryConstants.GENDER_MAP
+                    .getOrDefault(val, val));
         }
 
         // Normalize Country to ISO codes
@@ -39,7 +41,7 @@ public class QueryNormalizer {
             normalized.setCountry_id(mapped != null ? mapped : val.toUpperCase());
         }
 
-        // Canonicalize Age (Prefer explicit ranges over groups)
+        // Canonicalize Age
         if (isPresent(original.getAge_group())) {
             var range = QueryConstants.AGE_RANGE_MAP.get(original.getAge_group().toLowerCase().trim());
             if (range != null) {
@@ -67,6 +69,7 @@ public class QueryNormalizer {
             return "%sall".formatted(NAMESPACE);
 
         QueryCriteria normalized = normalize(criteria);
+
         TreeMap<String, String> fields = new TreeMap<>();
 
         if (isPresent(normalized.getGender()))
