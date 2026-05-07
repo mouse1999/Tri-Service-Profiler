@@ -8,6 +8,7 @@ import com.mouse.profiler.manager.ProfileManager;
 import com.mouse.profiler.service.CsvIngestionService;
 import com.mouse.profiler.service.JobStatusService;
 import com.mouse.profiler.utils.CsvExportUtil;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -224,34 +225,33 @@ public class ProfileController {
 
     // ==================== CSV UPLOAD (ASYNC) ====================
 
-    @PostMapping("/upload")
-    public ResponseEntity<Map<String, String>> uploadProfiles(@RequestParam("file") MultipartFile file) {
+    @PostMapping(value = "/upload", consumes = "text/csv")
+    public ResponseEntity<Map<String, String>> uploadProfiles(HttpServletRequest request) {
 
         log.info("========================================");
-        log.info("UPLOAD REQUEST RECEIVED");
+        log.info("UPLOAD REQUEST RECEIVED (RAW CSV)");
         log.info("========================================");
 
-        if (file == null || file.isEmpty()) {
-            log.warn("Upload rejected: file is empty or null");
+        long contentLength = request.getContentLengthLong();
+        String contentType = request.getContentType();
+
+        log.info("Request details:");
+        log.info("  - Content-Type: {}", contentType);
+        log.info("  - Content-Length: {} bytes ({} MB)", contentLength, contentLength / (1024 * 1024));
+
+        if (contentLength <= 0) {
+            log.warn("Upload rejected: file is empty");
             throw new InvalidInputException("File is empty or missing");
         }
 
-        String filename = file.getOriginalFilename();
-        long fileSize = file.getSize();
-        
-        log.info("File details:");
-        log.info("  - Name: {}", filename);
-        log.info("  - Size: {} bytes ({} MB)", fileSize, fileSize / (1024 * 1024));
-        log.info("  - Content type: {}", file.getContentType());
-
-        if (filename == null || !filename.toLowerCase().endsWith(".csv")) {
-            log.warn("Upload rejected: invalid file type - {}", filename);
-            throw new InvalidInputException("Only CSV files are accepted");
+        if (contentLength > 100 * 1024 * 1024) {
+            log.warn("Upload rejected: file too large - {} MB", contentLength / (1024 * 1024));
+            throw new InvalidInputException("File size exceeds maximum allowed (100MB)");
         }
 
-        if (file.getSize() > 100 * 1024 * 1024) {
-            log.warn("Upload rejected: file too large - {} MB", fileSize / (1024 * 1024));
-            throw new InvalidInputException("File size exceeds maximum allowed (100MB)");
+        if (contentType == null || !contentType.toLowerCase().contains("csv")) {
+            log.warn("Upload rejected: invalid content type - {}", contentType);
+            throw new InvalidInputException("Only CSV files are accepted (Content-Type: text/csv)");
         }
 
         log.info("File validation passed");
@@ -271,45 +271,45 @@ public class ProfileController {
         long submitTime = System.currentTimeMillis();
 
         CompletableFuture.supplyAsync(() -> {
-            log.info("Async task started for jobId: {}", jobId);
-            long taskStart = System.currentTimeMillis();
-            try {
-                CsvIngestionResult result = csvIngestionService.ingest(file);
-                long taskDuration = System.currentTimeMillis() - taskStart;
-                log.info("Async task completed for jobId: {} - duration: {}ms", jobId, taskDuration);
-                return result;
-            } catch (Exception e) {
-                log.error("Async task failed for jobId: {} - error: {}", jobId, e.getMessage(), e);
-                throw new RuntimeException(e);
-            }
-        }, csvIngestionExecutor)
-        .thenAccept(result -> {
-            log.info("Processing result for jobId: {}", jobId);
-            log.info("  - Inserted: {}", result.getInserted());
-            log.info("  - Skipped: {}", result.getSkipped());
-            log.info("  - Total rows: {}", result.getTotalRows());
-            
-            try {
-                jobStatusService.completeJob(jobId, result);
-                log.info("Job status updated to COMPLETED in Redis - jobId: {}", jobId);
-            } catch (Exception e) {
-                log.error("Failed to update job status to COMPLETED: {}", e.getMessage(), e);
-            }
-        })
-        .exceptionally(throwable -> {
-            log.error("Async processing failed for jobId: {}", jobId, throwable);
-            String errorMessage = throwable.getCause() != null ? 
-                    throwable.getCause().getMessage() : throwable.getMessage();
-            log.error("Error details: {}", errorMessage);
-            
-            try {
-                jobStatusService.failJob(jobId, errorMessage);
-                log.info("Job status updated to FAILED in Redis - jobId: {}", jobId);
-            } catch (Exception e) {
-                log.error("Failed to update job status to FAILED: {}", e.getMessage(), e);
-            }
-            return null;
-        });
+                    log.info("Async task started for jobId: {}", jobId);
+                    long taskStart = System.currentTimeMillis();
+                    try {
+                        CsvIngestionResult result = csvIngestionService.ingest(request.getInputStream());
+                        long taskDuration = System.currentTimeMillis() - taskStart;
+                        log.info("Async task completed for jobId: {} - duration: {}ms", jobId, taskDuration);
+                        return result;
+                    } catch (Exception e) {
+                        log.error("Async task failed for jobId: {} - error: {}", jobId, e.getMessage(), e);
+                        throw new RuntimeException(e);
+                    }
+                }, csvIngestionExecutor)
+                .thenAccept(result -> {
+                    log.info("Processing result for jobId: {}", jobId);
+                    log.info("  - Inserted: {}", result.getInserted());
+                    log.info("  - Skipped: {}", result.getSkipped());
+                    log.info("  - Total rows: {}", result.getTotalRows());
+
+                    try {
+                        jobStatusService.completeJob(jobId, result);
+                        log.info("Job status updated to COMPLETED in Redis - jobId: {}", jobId);
+                    } catch (Exception e) {
+                        log.error("Failed to update job status to COMPLETED: {}", e.getMessage(), e);
+                    }
+                })
+                .exceptionally(throwable -> {
+                    log.error("Async processing failed for jobId: {}", jobId, throwable);
+                    String errorMessage = throwable.getCause() != null ?
+                            throwable.getCause().getMessage() : throwable.getMessage();
+                    log.error("Error details: {}", errorMessage);
+
+                    try {
+                        jobStatusService.failJob(jobId, errorMessage);
+                        log.info("Job status updated to FAILED in Redis - jobId: {}", jobId);
+                    } catch (Exception e) {
+                        log.error("Failed to update job status to FAILED: {}", e.getMessage(), e);
+                    }
+                    return null;
+                });
 
         long dispatchTime = System.currentTimeMillis() - submitTime;
         log.info("Async task dispatched in {}ms - jobId: {}", dispatchTime, jobId);
