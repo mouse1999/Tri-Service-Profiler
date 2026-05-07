@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -41,15 +42,33 @@ public class CsvIngestionService {
     private final JdbcTemplate jdbcTemplate;
     private final QueryCacheService cacheService;
 
+    // Original method for MultipartFile (kept for compatibility)
     public CsvIngestionResult ingest(MultipartFile file) {
+        try {
+            return ingest(file.getInputStream(), file.getOriginalFilename(), file.getSize());
+        } catch (Exception e) {
+            log.error("Failed to read file: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to read CSV file", e);
+        }
+    }
+
+    // New method for raw InputStream (used by the upload endpoint)
+    public CsvIngestionResult ingest(InputStream inputStream) {
+        return ingest(inputStream, "stream", 0);
+    }
+
+    // Core ingestion logic
+    private CsvIngestionResult ingest(InputStream inputStream, String filename, long fileSize) {
         long start = System.currentTimeMillis();
-        
+
         log.info("========================================");
         log.info("CSV INGESTION STARTED");
         log.info("========================================");
-        log.info("File name: {}", file.getOriginalFilename());
-        log.info("File size: {} bytes ({} MB)", file.getSize(), file.getSize() / (1024 * 1024));
-        
+        log.info("File name: {}", filename);
+        if (fileSize > 0) {
+            log.info("File size: {} bytes ({} MB)", fileSize, fileSize / (1024 * 1024));
+        }
+
         int total = 0;
         int inserted = 0;
         int skipped = 0;
@@ -57,38 +76,33 @@ public class CsvIngestionService {
         List<Object[]> batch = new ArrayList<>(BATCH_SIZE);
 
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
+                new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
 
             String header = reader.readLine();
             log.info("CSV header: {}", header);
-            
+
             if (header == null) {
                 log.warn("CSV file is empty");
                 return buildResult(0, 0, 0, toReasonMap(reasons));
             }
 
             String line;
-            int lineNumber = 1; // header is line 1
-            long lastLogTime = System.currentTimeMillis();
-            
+            int lineNumber = 1;
+
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
-                
+
                 if (line.isBlank()) {
                     reasons[SkipReason.MALFORMED_ROW.ordinal()]++;
                     total++;
-                    log.debug("Line {}: empty row skipped", lineNumber);
                     continue;
                 }
 
                 total++;
-                
-                // Log progress every 10,000 rows
+
                 if (total % 10000 == 0) {
-                    long now = System.currentTimeMillis();
-                    log.info("Progress: {} rows processed, {} inserted, {} skipped in {}ms", 
-                            total, inserted, skipped, now - start);
-                    lastLogTime = now;
+                    log.info("Progress: {} rows processed, {} inserted, {} skipped",
+                            total, inserted, skipped);
                 }
 
                 Object[] row = validateRow(line, lineNumber, reasons);
@@ -104,7 +118,6 @@ public class CsvIngestionService {
                     inserted += result[0];
                     skipped += result[1];
                     batch.clear();
-                    log.debug("Batch flushed: {} inserted, {} duplicates", result[0], result[1]);
                 }
             }
 
@@ -120,10 +133,9 @@ public class CsvIngestionService {
 
         } catch (OutOfMemoryError e) {
             log.error("OutOfMemoryError during CSV ingestion: {}", e.getMessage());
-            log.error("Total rows processed before crash: {}", total);
             throw new RuntimeException("File too large for available memory. Try splitting the file into smaller chunks.", e);
         } catch (Exception e) {
-            log.error("CSV ingestion failed at row {}: {}", total + 1, e.getMessage(), e);
+            log.error("CSV ingestion failed: {}", e.getMessage(), e);
             throw new RuntimeException("CSV ingestion failed: " + e.getMessage(), e);
         }
 
@@ -140,8 +152,7 @@ public class CsvIngestionService {
         log.info("  - Skipped: {}", skipped);
         log.info("  - Duration: {}ms ({} seconds)", duration, duration / 1000);
         log.info("========================================");
-        
-        // Log skip reason breakdown
+
         Map<String, Integer> reasonMap = toReasonMap(reasons);
         log.info("Skip reasons: {}", reasonMap);
 
@@ -153,7 +164,7 @@ public class CsvIngestionService {
 
         if (cols.length != EXPECTED_COLUMNS) {
             reasons[SkipReason.MALFORMED_ROW.ordinal()]++;
-            log.debug("Line {}: malformed - expected {} columns, got {}", 
+            log.debug("Line {}: malformed - expected {} columns, got {}",
                     lineNumber, EXPECTED_COLUMNS, cols.length);
             return null;
         }
@@ -259,23 +270,20 @@ public class CsvIngestionService {
                 """;
 
         try {
-            long start = System.currentTimeMillis();
             int[] results = jdbcTemplate.batchUpdate(sql, batch);
-            long duration = System.currentTimeMillis() - start;
-            
             int inserted = 0;
             for (int r : results) {
                 if (r > 0) inserted++;
             }
             int duplicates = batch.size() - inserted;
-            
+
             if (duplicates > 0) {
                 reasons[SkipReason.DUPLICATE_NAME.ordinal()] += duplicates;
             }
-            
-            log.debug("Batch insert: {} inserted, {} duplicates, {}ms", inserted, duplicates, duration);
+
+            log.debug("Batch insert: {} inserted, {} duplicates", inserted, duplicates);
             return new int[]{inserted, duplicates};
-            
+
         } catch (Exception e) {
             log.error("Batch insert failed: {}", e.getMessage());
             reasons[SkipReason.DUPLICATE_NAME.ordinal()] += batch.size();
@@ -290,12 +298,10 @@ public class CsvIngestionService {
         try {
             float f = Float.parseFloat(value);
             if (f < 0.0f || f > 1.0f) {
-                log.debug("Probability out of range: {}", value);
                 return null;
             }
             return f;
         } catch (NumberFormatException e) {
-            log.debug("Invalid probability format: {}", value);
             return null;
         }
     }
