@@ -43,7 +43,16 @@ public class CsvIngestionService {
 
     public CsvIngestionResult ingest(MultipartFile file) {
         long start = System.currentTimeMillis();
-        int total = 0, inserted = 0, skipped = 0;
+        
+        log.info("========================================");
+        log.info("CSV INGESTION STARTED");
+        log.info("========================================");
+        log.info("File name: {}", file.getOriginalFilename());
+        log.info("File size: {} bytes ({} MB)", file.getSize(), file.getSize() / (1024 * 1024));
+        
+        int total = 0;
+        int inserted = 0;
+        int skipped = 0;
         int[] reasons = new int[SkipReason.VALUES.length];
         List<Object[]> batch = new ArrayList<>(BATCH_SIZE);
 
@@ -51,20 +60,38 @@ public class CsvIngestionService {
                 new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
 
             String header = reader.readLine();
+            log.info("CSV header: {}", header);
+            
             if (header == null) {
+                log.warn("CSV file is empty");
                 return buildResult(0, 0, 0, toReasonMap(reasons));
             }
 
             String line;
+            int lineNumber = 1; // header is line 1
+            long lastLogTime = System.currentTimeMillis();
+            
             while ((line = reader.readLine()) != null) {
+                lineNumber++;
+                
                 if (line.isBlank()) {
                     reasons[SkipReason.MALFORMED_ROW.ordinal()]++;
                     total++;
+                    log.debug("Line {}: empty row skipped", lineNumber);
                     continue;
                 }
 
                 total++;
-                Object[] row = validateRow(line, reasons);
+                
+                // Log progress every 10,000 rows
+                if (total % 10000 == 0) {
+                    long now = System.currentTimeMillis();
+                    log.info("Progress: {} rows processed, {} inserted, {} skipped in {}ms", 
+                            total, inserted, skipped, now - start);
+                    lastLogTime = now;
+                }
+
+                Object[] row = validateRow(line, lineNumber, reasons);
                 if (row == null) {
                     skipped++;
                     continue;
@@ -77,58 +104,86 @@ public class CsvIngestionService {
                     inserted += result[0];
                     skipped += result[1];
                     batch.clear();
+                    log.debug("Batch flushed: {} inserted, {} duplicates", result[0], result[1]);
                 }
             }
 
+            log.info("Finished reading CSV. Total lines processed: {}", lineNumber - 1);
+
             if (!batch.isEmpty()) {
+                log.info("Flushing final batch ({} rows)", batch.size());
                 int[] result = flushBatch(batch, reasons);
                 inserted += result[0];
                 skipped += result[1];
+                batch.clear();
             }
 
+        } catch (OutOfMemoryError e) {
+            log.error("OutOfMemoryError during CSV ingestion: {}", e.getMessage());
+            log.error("Total rows processed before crash: {}", total);
+            throw new RuntimeException("File too large for available memory. Try splitting the file into smaller chunks.", e);
         } catch (Exception e) {
-            log.error("CSV ingestion failed: {}", e.getMessage());
+            log.error("CSV ingestion failed at row {}: {}", total + 1, e.getMessage(), e);
+            throw new RuntimeException("CSV ingestion failed: " + e.getMessage(), e);
         }
 
         if (inserted > 0) {
+            log.info("Evicting query cache ({} new profiles inserted)", inserted);
             cacheService.evictAll();
         }
 
-        log.info("Ingestion done: {} rows, {} inserted, {} skipped in {}ms",
-                total, inserted, skipped, System.currentTimeMillis() - start);
+        long duration = System.currentTimeMillis() - start;
+        log.info("========================================");
+        log.info("CSV INGESTION COMPLETED");
+        log.info("  - Total rows: {}", total);
+        log.info("  - Inserted: {}", inserted);
+        log.info("  - Skipped: {}", skipped);
+        log.info("  - Duration: {}ms ({} seconds)", duration, duration / 1000);
+        log.info("========================================");
+        
+        // Log skip reason breakdown
+        Map<String, Integer> reasonMap = toReasonMap(reasons);
+        log.info("Skip reasons: {}", reasonMap);
 
-        return buildResult(total, inserted, skipped, toReasonMap(reasons));
+        return buildResult(total, inserted, skipped, reasonMap);
     }
 
-    private Object[] validateRow(String line, int[] reasons) {
+    private Object[] validateRow(String line, int lineNumber, int[] reasons) {
         String[] cols = COMMA_SPLIT.split(line, -1);
 
         if (cols.length != EXPECTED_COLUMNS) {
             reasons[SkipReason.MALFORMED_ROW.ordinal()]++;
+            log.debug("Line {}: malformed - expected {} columns, got {}", 
+                    lineNumber, EXPECTED_COLUMNS, cols.length);
             return null;
         }
 
         String name = cols[COL_NAME].trim().toLowerCase();
         if (name.isBlank()) {
             reasons[SkipReason.MISSING_FIELDS.ordinal()]++;
+            log.debug("Line {}: missing name", lineNumber);
             return null;
         }
 
         if (!NAME_PATTERN.matcher(name).matches()) {
             reasons[SkipReason.INVALID_NAME.ordinal()]++;
+            log.debug("Line {}: invalid name format '{}'", lineNumber, name);
             return null;
         }
 
         if (name.length() > MAX_NAME_LENGTH) {
             reasons[SkipReason.INVALID_NAME.ordinal()]++;
+            log.debug("Line {}: name too long ({} chars)", lineNumber, name.length());
             return null;
         }
 
         String gender = null;
-        if (!cols[COL_GENDER].trim().isBlank()) {
-            String g = cols[COL_GENDER].trim().toLowerCase();
+        String genderRaw = cols[COL_GENDER].trim();
+        if (!genderRaw.isBlank()) {
+            String g = genderRaw.toLowerCase();
             if (!VALID_GENDERS.contains(g)) {
                 reasons[SkipReason.INVALID_GENDER.ordinal()]++;
+                log.debug("Line {}: invalid gender '{}'", lineNumber, genderRaw);
                 return null;
             }
             gender = g;
@@ -142,11 +197,13 @@ public class CsvIngestionService {
                 age = Integer.parseInt(ageStr);
                 if (age < 0 || age > 150) {
                     reasons[SkipReason.INVALID_AGE.ordinal()]++;
+                    log.debug("Line {}: invalid age '{}' (must be 0-150)", lineNumber, age);
                     return null;
                 }
                 ageGroup = AgeCategory.fromAge(age).getLabel();
             } catch (NumberFormatException e) {
                 reasons[SkipReason.INVALID_AGE.ordinal()]++;
+                log.debug("Line {}: non-numeric age '{}'", lineNumber, ageStr);
                 return null;
             }
         }
@@ -157,6 +214,7 @@ public class CsvIngestionService {
         if (!rawCountryId.isBlank()) {
             if (!COUNTRY_CODE_PATTERN.matcher(rawCountryId).matches()) {
                 reasons[SkipReason.INVALID_COUNTRY.ordinal()]++;
+                log.debug("Line {}: invalid country code '{}'", lineNumber, rawCountryId);
                 return null;
             }
             countryId = rawCountryId;
@@ -168,11 +226,13 @@ public class CsvIngestionService {
 
         if (genderProb == null && !cols[COL_GENDER_PROB].trim().isBlank()) {
             reasons[SkipReason.INVALID_PROBABILITY.ordinal()]++;
+            log.debug("Line {}: invalid gender probability '{}'", lineNumber, cols[COL_GENDER_PROB].trim());
             return null;
         }
 
         if (countryProb == null && !cols[COL_COUNTRY_PROB].trim().isBlank()) {
             reasons[SkipReason.INVALID_PROBABILITY.ordinal()]++;
+            log.debug("Line {}: invalid country probability '{}'", lineNumber, cols[COL_COUNTRY_PROB].trim());
             return null;
         }
 
@@ -199,18 +259,25 @@ public class CsvIngestionService {
                 """;
 
         try {
+            long start = System.currentTimeMillis();
             int[] results = jdbcTemplate.batchUpdate(sql, batch);
+            long duration = System.currentTimeMillis() - start;
+            
             int inserted = 0;
             for (int r : results) {
                 if (r > 0) inserted++;
             }
             int duplicates = batch.size() - inserted;
+            
             if (duplicates > 0) {
                 reasons[SkipReason.DUPLICATE_NAME.ordinal()] += duplicates;
             }
+            
+            log.debug("Batch insert: {} inserted, {} duplicates, {}ms", inserted, duplicates, duration);
             return new int[]{inserted, duplicates};
+            
         } catch (Exception e) {
-            log.error("Batch failed: {}", e.getMessage());
+            log.error("Batch insert failed: {}", e.getMessage());
             reasons[SkipReason.DUPLICATE_NAME.ordinal()] += batch.size();
             return new int[]{0, batch.size()};
         }
@@ -223,10 +290,12 @@ public class CsvIngestionService {
         try {
             float f = Float.parseFloat(value);
             if (f < 0.0f || f > 1.0f) {
+                log.debug("Probability out of range: {}", value);
                 return null;
             }
             return f;
         } catch (NumberFormatException e) {
+            log.debug("Invalid probability format: {}", value);
             return null;
         }
     }
