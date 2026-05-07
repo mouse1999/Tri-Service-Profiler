@@ -29,6 +29,7 @@ import java.util.concurrent.Executor;
 import static reactor.netty.http.HttpConnectionLiveness.log;
 
 @RestController
+@Slf4j
 @RequestMapping("/api/profiles")
 @RequiredArgsConstructor
 public class ProfileController {
