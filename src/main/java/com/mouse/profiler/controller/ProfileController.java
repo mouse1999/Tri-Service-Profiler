@@ -205,59 +205,136 @@ public class ProfileController {
 
 
 
-    /**
-     * Uploads a CSV file for batch profile ingestion - ASYNCHRONOUS with Redis.
-     *
-     * @param file CSV file (max 500k rows)
-     * @return job ID for status tracking
-     */
-    @PostMapping("/upload")
-    public ResponseEntity<Map<String, String>> uploadProfiles(
-            @RequestParam("file") MultipartFile file) {
+   /**
+ * Uploads a CSV file for batch profile ingestion - ASYNCHRONOUS with Redis.
+ *
+ * @param file CSV file (max 500k rows)
+ * @return job ID for status tracking
+ */
+@PostMapping("/upload")
+public ResponseEntity<Map<String, String>> uploadProfiles(
+        @RequestParam("file") MultipartFile file) {
 
-        // Validate file
-        if (file == null || file.isEmpty()) {
-            throw new InvalidInputException("File is empty or missing");
-        }
+    log.info("========================================");
+    log.info("UPLOAD REQUEST RECEIVED");
+    log.info("========================================");
+    
+    long startTime = System.currentTimeMillis();
 
-        String filename = file.getOriginalFilename();
-        if (filename == null || !filename.toLowerCase().endsWith(".csv")) {
-            throw new InvalidInputException("Only CSV files are accepted");
-        }
-
-        if (file.getSize() > 100 * 1024 * 1024) { // 100MB limit
-            throw new InvalidInputException("File size exceeds maximum allowed (100MB)");
-        }
-
-        // Generate unique job ID
-        String jobId = UUID.randomUUID().toString();
-        log.info("Async CSV upload started - jobId: {}, filename: {}, size: {} bytes",
-                jobId, filename, file.getSize());
-
-        // Store initial processing status in Redis
-        jobStatusService.createJob(jobId);
-
-        // Process asynchronously
-        CompletableFuture.supplyAsync(() -> csvIngestionService.ingest(file),
-                        csvIngestionExecutor)
-                .thenAccept(result -> {
-                    jobStatusService.completeJob(jobId, result);
-                    log.info("Async CSV upload completed - jobId: {}, inserted: {}, skipped: {}",
-                            jobId, result.getInserted(), result.getSkipped());
-                })
-                .exceptionally(throwable -> {
-                    log.error("Async CSV upload failed - jobId: {}, error: {}", jobId, throwable.getMessage());
-                    jobStatusService.failJob(jobId, throwable.getMessage());
-                    return null;
-                });
-
-        // Return immediately with job ID
-        return ResponseEntity.accepted().body(Map.of(
-                "status", "accepted",
-                "jobId", jobId,
-                "message", "Upload accepted."
-        ));
+    // Validate file
+    if (file == null || file.isEmpty()) {
+        log.warn("Upload rejected: file is empty or null");
+        throw new InvalidInputException("File is empty or missing");
     }
+
+    String filename = file.getOriginalFilename();
+    long fileSize = file.getSize();
+    
+    log.info("File details:");
+    log.info("  - Name: {}", filename);
+    log.info("  - Size: {} bytes ({} MB)", fileSize, fileSize / (1024 * 1024));
+    log.info("  - Content type: {}", file.getContentType());
+
+    if (filename == null || !filename.toLowerCase().endsWith(".csv")) {
+        log.warn("Upload rejected: invalid file type - {}", filename);
+        throw new InvalidInputException("Only CSV files are accepted");
+    }
+
+    if (file.getSize() > 100 * 1024 * 1024) { // 100MB limit
+        log.warn("Upload rejected: file too large - {} MB (max 100 MB)", fileSize / (1024 * 1024));
+        throw new InvalidInputException("File size exceeds maximum allowed (100MB)");
+    }
+
+    log.info("File validation passed");
+
+    // Generate unique job ID
+    String jobId = UUID.randomUUID().toString();
+    log.info("Generated jobId: {}", jobId);
+
+    // Store initial processing status in Redis
+    try {
+        jobStatusService.createJob(jobId);
+        log.info("Job status stored in Redis - jobId: {}, status: processing", jobId);
+    } catch (Exception e) {
+        log.error("Failed to store job status in Redis: {}", e.getMessage(), e);
+        throw new RuntimeException("Could not initialize upload job", e);
+    }
+
+    // Log thread pool status before submission
+    ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) csvIngestionExecutor;
+    log.info("Thread pool status before submission:");
+    log.info("  - Active threads: {}", executor.getActiveCount());
+    log.info("  - Pool size: {}", executor.getPoolSize());
+    log.info("  - Queue size: {}", executor.getThreadPoolExecutor().getQueue().size());
+
+    // Process asynchronously
+    log.info("Submitting CSV ingestion to thread pool - jobId: {}", jobId);
+    
+    long submitTime = System.currentTimeMillis();
+    
+    CompletableFuture.supplyAsync(() -> {
+        log.info("Async task started for jobId: {}", jobId);
+        long taskStart = System.currentTimeMillis();
+        try {
+            CsvIngestionResult result = csvIngestionService.ingest(file);
+            long taskDuration = System.currentTimeMillis() - taskStart;
+            log.info("Async task completed for jobId: {} - duration: {}ms", jobId, taskDuration);
+            return result;
+        } catch (Exception e) {
+            log.error("Async task failed for jobId: {} - error: {}", jobId, e.getMessage(), e);
+            throw new RuntimeException(e);
+        }
+    }, csvIngestionExecutor)
+    .thenAccept(result -> {
+        log.info("Processing result for jobId: {}", jobId);
+        log.info("  - Inserted: {}", result.getInserted());
+        log.info("  - Skipped: {}", result.getSkipped());
+        log.info("  - Total rows: {}", result.getTotalRows());
+        log.info("  - Skip reasons: {}", result.getReasons());
+        
+        try {
+            jobStatusService.completeJob(jobId, result);
+            log.info("Job status updated to COMPLETED in Redis - jobId: {}", jobId);
+        } catch (Exception e) {
+            log.error("Failed to update job status to COMPLETED: {}", e.getMessage(), e);
+        }
+    })
+    .exceptionally(throwable -> {
+        log.error("Async processing failed for jobId: {}", jobId, throwable);
+        
+        String errorMessage = throwable.getCause() != null ? 
+                throwable.getCause().getMessage() : throwable.getMessage();
+        log.error("Error details: {}", errorMessage);
+        
+        try {
+            jobStatusService.failJob(jobId, errorMessage);
+            log.info("Job status updated to FAILED in Redis - jobId: {}", jobId);
+        } catch (Exception e) {
+            log.error("Failed to update job status to FAILED: {}", e.getMessage(), e);
+        }
+        return null;
+    });
+
+    long dispatchTime = System.currentTimeMillis() - submitTime;
+    log.info("Async task dispatched in {}ms - jobId: {}", dispatchTime, jobId);
+
+    // Log thread pool status after submission
+    log.info("Thread pool status after submission:");
+    log.info("  - Active threads: {}", executor.getActiveCount());
+    log.info("  - Pool size: {}", executor.getPoolSize());
+    log.info("  - Queue size: {}", executor.getThreadPoolExecutor().getQueue().size());
+
+    long totalTime = System.currentTimeMillis() - startTime;
+    log.info("Upload endpoint returning response - total time: {}ms", totalTime);
+    log.info("========================================");
+
+    // Return immediately with job ID
+    return ResponseEntity.accepted().body(Map.of(
+            "status", "accepted",
+            "jobId", jobId,
+            "message", "Upload accepted. Poll /api/profiles/upload/" + jobId + "/status for progress."
+    ));
+}
 
     /**
      * Gets the status of an async CSV upload job from Redis.
