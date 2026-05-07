@@ -63,7 +63,7 @@ public class ProfileController {
 
         log.info("Creating profile for name: {}", name);
         ProfileDto profile = profileManager.createProfile(name);
-        log.info("Profile created successfully with ID: {}", profile.getId());
+        log.info("Profile created successfully with ID: {}", profile.id());
 
         return ResponseEntity
                 .status(HttpStatus.CREATED)
