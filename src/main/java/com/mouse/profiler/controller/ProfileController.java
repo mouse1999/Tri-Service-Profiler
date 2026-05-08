@@ -279,7 +279,7 @@ public class ProfileController {
                         return result;
                     } catch (Exception e) {
                         log.error("Async task failed for jobId: {}", jobId, e);
-                        throw new RuntimeException(e);
+                        throw new InvalidInputException("Unable to read uploaded file")
                     } finally {
                         try { Files.deleteIfExists(tempFile); } catch (IOException ignored) {}
                     }
